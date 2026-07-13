@@ -26,3 +26,27 @@ export type AppStatus =
   | "ready"
   | "camera-denied"
   | "error";
+
+export interface FaceRelativePoint {
+  fx: number;
+  fy: number;
+}
+
+export interface MaskStroke {
+  style: BrushStyle;
+  color: string;
+  size: number;
+  points: FaceRelativePoint[];
+}
+
+export interface MaskLayer {
+  id: string;
+  name: string;
+  strokes: MaskStroke[];
+  scale: number;
+  offsetX: number;
+  offsetY: number;
+  opacity: number;
+  visible: boolean;
+}
+

@@ -15,6 +15,7 @@ import {
   GripIcon,
   ImageIcon,
   LayersIcon,
+  MaskIcon,
   SettingsIcon,
   TrashIcon,
   UndoIcon,
@@ -34,6 +35,9 @@ interface ActionsPanelProps {
   onSave: (includeCamera: boolean) => void;
   drawingHand: "Left" | "Right";
   onDrawingHandChange: (hand: "Left" | "Right") => void;
+  onCreateMask: () => void;
+  maskWidgetOpen: boolean;
+  onToggleMaskWidget: () => void;
 }
 
 /**
@@ -54,6 +58,9 @@ export function ActionsPanel({
   onSave,
   drawingHand,
   onDrawingHandChange,
+  onCreateMask,
+  maskWidgetOpen,
+  onToggleMaskWidget,
 }: ActionsPanelProps) {
   const drag = usePointerDrag(onMove);
   const [collapsed, setCollapsed] = useState(false);
@@ -116,6 +123,23 @@ export function ActionsPanel({
           title={cameraVisible ? "Hide camera" : "Show camera"}
         >
           {cameraVisible ? <CameraIcon /> : <CameraOffIcon />}
+        </button>
+
+        <button
+          className="icon-btn"
+          onClick={onCreateMask}
+          disabled={!canUndo}
+          title="Bake Drawing into Face Mask"
+        >
+          <MaskIcon />
+        </button>
+
+        <button
+          className={`icon-btn ${maskWidgetOpen ? "active" : ""}`}
+          onClick={onToggleMaskWidget}
+          title="Open Mask Studio"
+        >
+          <LayersIcon />
         </button>
 
         <div className="save-wrap" ref={menuRef}>

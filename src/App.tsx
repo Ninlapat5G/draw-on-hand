@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { HandLandmarker } from "@mediapipe/tasks-vision";
+import type { HandLandmarker, FaceLandmarker } from "@mediapipe/tasks-vision";
 import { ActionsPanel } from "./components/ActionsPanel";
 import { RadialDock } from "./components/RadialDock";
 import { TopBar } from "./components/TopBar";
+import { MaskWidget } from "./components/MaskWidget";
 import { AlertIcon } from "./components/icons";
 import { savePng } from "./lib/capture";
 import {
@@ -19,8 +20,15 @@ import {
   startCamera,
   videoPointToCanvas,
 } from "./lib/tracking";
+import {
+  createFaceLandmarker,
+  getFaceTransform,
+  canvasToFaceRelative,
+  faceRelativeToCanvas,
+  type FaceTransform,
+} from "./lib/faceTracking";
 import { drawStroke, eraseSegment } from "./lib/strokes";
-import type { AppStatus, Stroke, Tool } from "./types";
+import type { AppStatus, Stroke, Tool, MaskLayer, MaskStroke } from "./types";
 
 const DEFAULT_TOOL: Tool = { style: "pen", color: "#22d3ee", size: 10 };
 const PINCH_STORAGE_KEY = "draw-on-hand.pinchRatio";
@@ -74,6 +82,17 @@ export default function App() {
     return stored === "Left" || stored === "Right" ? stored : "Right";
   });
 
+  const drawingHandRef = useRef(drawingHand);
+  const masksRef = useRef<MaskLayer[]>([]);
+
+  useEffect(() => {
+    drawingHandRef.current = drawingHand;
+  }, [drawingHand]);
+
+  useEffect(() => {
+    masksRef.current = masks;
+  }, [masks]);
+
   // Floating panels: the radial dock (anchored by its center point) and the
   // actions panel (top-left point; null = its default CSS position).
   const [dockPos, setDockPos] = useState(() => ({
@@ -85,6 +104,34 @@ export default function App() {
     null,
   );
   const actionsRef = useRef<HTMLDivElement>(null);
+
+  const [masks, setMasks] = useState<MaskLayer[]>([]);
+  const [selectedMaskId, setSelectedMaskId] = useState<string | null>(null);
+  const [maskWidgetOpen, setMaskWidgetOpen] = useState(false);
+  const [maskWidgetPos, setMaskWidgetPos] = useState<{ x: number; y: number } | null>(null);
+
+  const maskWidgetRef = useRef<HTMLDivElement>(null);
+  const lastFaceTransformRef = useRef<FaceTransform | null>(null);
+
+  const handleSelectMask = useCallback((id: string | null) => {
+    setSelectedMaskId(id);
+  }, []);
+
+  const handleToggleMaskVisible = useCallback((id: string) => {
+    setMasks((prev) =>
+      prev.map((m) => (m.id === id ? { ...m, visible: !m.visible } : m))
+    );
+  }, []);
+
+  const handleDeleteMask = useCallback((id: string) => {
+    setMasks((prev) => prev.filter((m) => m.id !== id));
+  }, []);
+
+  const handleUpdateMask = useCallback((id: string, updates: Partial<MaskLayer>) => {
+    setMasks((prev) =>
+      prev.map((m) => (m.id === id ? { ...m, ...updates } : m))
+    );
+  }, []);
 
   const handleDrawingHandChange = useCallback((hand: "Left" | "Right") => {
     setDrawingHand(hand);
@@ -111,6 +158,17 @@ export default function App() {
           return r ? { x: r.left, y: r.top } : null;
         })();
         if (!base) return p;
+        return {
+          x: Math.min(window.innerWidth - 60, Math.max(8, base.x + dx)),
+          y: Math.min(window.innerHeight - 60, Math.max(8, base.y + dy)),
+        };
+      });
+    } else if (id === "mask") {
+      setMaskWidgetPos((p) => {
+        const base = p ?? (() => {
+          const r = maskWidgetRef.current?.getBoundingClientRect();
+          return r ? { x: r.left, y: r.top } : { x: window.innerWidth - 300, y: 150 };
+        })();
         return {
           x: Math.min(window.innerWidth - 60, Math.max(8, base.x + dx)),
           y: Math.min(window.innerHeight - 60, Math.max(8, base.y + dy)),
@@ -167,6 +225,14 @@ export default function App() {
             }
           : p,
       );
+      setMaskWidgetPos((p) =>
+        p
+          ? {
+              x: Math.min(window.innerWidth - 60, Math.max(8, p.x)),
+              y: Math.min(window.innerHeight - 60, Math.max(8, p.y)),
+            }
+          : p,
+      );
     };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
@@ -194,6 +260,7 @@ export default function App() {
     let cancelled = false;
     let rafId = 0;
     let landmarker: HandLandmarker | null = null;
+    let faceLandmarker: FaceLandmarker | null = null;
     let stream: MediaStream | null = null;
 
     const drawCursor = (
@@ -299,7 +366,10 @@ export default function App() {
       const base = baseRef.current;
       if (!video || !live || !base || !landmarker) return;
 
-      const result = landmarker.detectForVideo(video, performance.now());
+      const timestamp = performance.now();
+      const result = landmarker.detectForVideo(video, timestamp);
+      const faceResult = faceLandmarker?.detectForVideo(video, timestamp);
+
       const lctx = live.getContext("2d");
       const bctx = base.getContext("2d");
       if (!lctx || !bctx) return;
@@ -308,8 +378,38 @@ export default function App() {
       const h = live.clientHeight;
       lctx.clearRect(0, 0, w, h);
 
-      // Stable per-hand keys from handedness (Left/Right), so gesture state
-      // follows the same physical hand even when detection order flips.
+      // 1. Process Face Tracking & Render AR Masks
+      let faceTransform: FaceTransform | null = null;
+      if (faceResult && faceResult.faceLandmarks && faceResult.faceLandmarks.length > 0) {
+        const landmarks = faceResult.faceLandmarks[0];
+        faceTransform = getFaceTransform(landmarks);
+        lastFaceTransformRef.current = faceTransform;
+      } else {
+        lastFaceTransformRef.current = null;
+      }
+
+      if (faceTransform) {
+        for (const mask of masksRef.current) {
+          if (!mask.visible) continue;
+          lctx.save();
+          lctx.globalAlpha = mask.opacity;
+          for (const stroke of mask.strokes) {
+            const normalizedPoints = stroke.points.map((pt) =>
+              faceRelativeToCanvas(
+                pt,
+                faceTransform!,
+                mask.scale,
+                mask.offsetX,
+                mask.offsetY,
+              )
+            );
+            drawStroke(lctx, { ...stroke, points: normalizedPoints }, w, h);
+          }
+          lctx.restore();
+        }
+      }
+
+      // 2. Process Hand Tracking
       const seen = new Set<string>();
       const detected = result.landmarks.map((lm, i) => {
         let key = result.handedness?.[i]?.[0]?.categoryName ?? `hand-${i}`;
@@ -336,8 +436,11 @@ export default function App() {
           handPresentRef.current = false;
           setHandPresent(false);
         }
+        uiHandRef.current = null;
+        uiRef.current.clearHover();
         return;
       }
+
       if (!handPresentRef.current) {
         handPresentRef.current = true;
         setHandPresent(true);
@@ -366,8 +469,6 @@ export default function App() {
         );
         const overUi = isOverUi(pt.x, pt.y);
 
-        // Record where each pinch began: a UI pinch must never draw, a
-        // canvas pinch must never click a control it drifts across.
         if (hand.pinching && !state.prevPinch) {
           state.pinchFromUi = overUi;
           state.pinchFromCanvas = !overUi;
@@ -380,8 +481,6 @@ export default function App() {
         return { key, lm, state, hand, pt, overUi };
       });
 
-      // Exactly one hand drives the UI controller per frame: the hand that
-      // holds an active drag/slider grab, else the first hand over the UI.
       let uiFrame =
         uiRef.current.isEngaged() && uiHandRef.current
           ? frames.find((f) => f.key === uiHandRef.current)
@@ -409,7 +508,7 @@ export default function App() {
       const t = toolRef.current;
 
       for (const f of frames) {
-        const isEraserHand = f.key === (drawingHand === "Right" ? "Left" : "Right");
+        const isEraserHand = f.key === (drawingHandRef.current === "Right" ? "Left" : "Right");
         const handStyle = isEraserHand ? "eraser" : t.style;
         const handColor = isEraserHand ? "#e2e8f0" : t.color;
 
@@ -480,6 +579,7 @@ export default function App() {
       try {
         setStatus("loading-model");
         landmarker = await createHandLandmarker();
+        faceLandmarker = await createFaceLandmarker();
         if (cancelled) return;
 
         setStatus("starting-camera");
@@ -519,6 +619,7 @@ export default function App() {
       cancelAnimationFrame(rafId);
       stream?.getTracks().forEach((t) => t.stop());
       landmarker?.close();
+      faceLandmarker?.close();
     };
   }, [commitStroke, movePanel]);
 
@@ -543,9 +644,83 @@ export default function App() {
   const handleSave = useCallback((includeCamera: boolean) => {
     const base = baseRef.current;
     if (!base) return;
+    const ctx = base.getContext("2d");
+    const face = lastFaceTransformRef.current;
+    const w = base.clientWidth;
+    const h = base.clientHeight;
+
+    // Draw active masks onto the base canvas before saving
+    if (ctx && face) {
+      for (const mask of masks) {
+        if (!mask.visible) continue;
+        ctx.save();
+        ctx.globalAlpha = mask.opacity;
+        for (const stroke of mask.strokes) {
+          const normalizedPoints = stroke.points.map((pt) =>
+            faceRelativeToCanvas(
+              pt,
+              face,
+              mask.scale,
+              mask.offsetX,
+              mask.offsetY,
+            )
+          );
+          drawStroke(ctx, { ...stroke, points: normalizedPoints }, w, h);
+        }
+        ctx.restore();
+      }
+    }
+
     savePng(base, videoRef.current, includeCamera);
     setFlashKey((k) => k + 1);
-  }, []);
+
+    // Replay to clear the temporary masks off the base canvas
+    replay();
+  }, [masks, replay]);
+
+  const createMask = useCallback(() => {
+    const face = lastFaceTransformRef.current;
+    if (!face) {
+      alert("ไม่พบใบหน้าในกล้องเพื่อยึดตำแหน่งหน้ากาก กรุณาขยับหน้าให้อยู่ในหน้าจอ");
+      return;
+    }
+    if (strokesRef.current.length === 0) {
+      alert("กรุณาวาดลายเส้นบนหน้าจอก่อนกดสร้างหน้ากาก");
+      return;
+    }
+
+    const maskStrokes: MaskStroke[] = strokesRef.current.map((stroke) => {
+      const relativePoints = stroke.points.map((pt) =>
+        canvasToFaceRelative(pt.x, pt.y, face)
+      );
+      return {
+        style: stroke.style,
+        color: stroke.color,
+        size: stroke.size,
+        points: relativePoints,
+      };
+    });
+
+    const newMask: MaskLayer = {
+      id: `mask-${Date.now()}`,
+      name: `Mask ${masks.length + 1}`,
+      strokes: maskStrokes,
+      scale: 1.0,
+      offsetX: 0.0,
+      offsetY: 0.0,
+      opacity: 1.0,
+      visible: true,
+    };
+
+    setMasks((m) => [...m, newMask]);
+    setSelectedMaskId(newMask.id);
+    setMaskWidgetOpen(true);
+
+    // Clear the canvas and current strokes since they are now a mask!
+    strokesRef.current = [];
+    setStrokeCount(0);
+    replay();
+  }, [masks.length, replay]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -591,7 +766,25 @@ export default function App() {
         onSave={handleSave}
         drawingHand={drawingHand}
         onDrawingHandChange={handleDrawingHandChange}
+        onCreateMask={createMask}
+        maskWidgetOpen={maskWidgetOpen}
+        onToggleMaskWidget={() => setMaskWidgetOpen((v) => !v)}
       />
+
+      {maskWidgetOpen && (
+        <MaskWidget
+          innerRef={maskWidgetRef}
+          pos={maskWidgetPos}
+          onMove={(dx, dy) => movePanel("mask", dx, dy)}
+          masks={masks}
+          selectedMaskId={selectedMaskId}
+          onSelectMask={handleSelectMask}
+          onToggleVisible={handleToggleMaskVisible}
+          onDeleteMask={handleDeleteMask}
+          onUpdateMask={handleUpdateMask}
+          onClose={() => setMaskWidgetOpen(false)}
+        />
+      )}
 
       {status === "ready" && !hasDrawn && (
         <div className="hint glass">
