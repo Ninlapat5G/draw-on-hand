@@ -82,16 +82,6 @@ export default function App() {
     return stored === "Left" || stored === "Right" ? stored : "Right";
   });
 
-  const drawingHandRef = useRef(drawingHand);
-  const masksRef = useRef<MaskLayer[]>([]);
-
-  useEffect(() => {
-    drawingHandRef.current = drawingHand;
-  }, [drawingHand]);
-
-  useEffect(() => {
-    masksRef.current = masks;
-  }, [masks]);
 
   // Floating panels: the radial dock (anchored by its center point) and the
   // actions panel (top-left point; null = its default CSS position).
@@ -112,6 +102,17 @@ export default function App() {
 
   const maskWidgetRef = useRef<HTMLDivElement>(null);
   const lastFaceTransformRef = useRef<FaceTransform | null>(null);
+
+  const drawingHandRef = useRef(drawingHand);
+  const masksRef = useRef<MaskLayer[]>([]);
+
+  useEffect(() => {
+    drawingHandRef.current = drawingHand;
+  }, [drawingHand]);
+
+  useEffect(() => {
+    masksRef.current = masks;
+  }, [masks]);
 
   const handleSelectMask = useCallback((id: string | null) => {
     setSelectedMaskId(id);
