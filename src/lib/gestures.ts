@@ -15,9 +15,9 @@ export interface PinchConfig {
   ratioStart: number;
 }
 
-export const DEFAULT_PINCH_RATIO = 0.24;
-export const MIN_PINCH_RATIO = 0.14;
-export const MAX_PINCH_RATIO = 0.42;
+export const DEFAULT_PINCH_RATIO = 0.35;
+export const MIN_PINCH_RATIO = 0.18;
+export const MAX_PINCH_RATIO = 0.55;
 
 function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v));
