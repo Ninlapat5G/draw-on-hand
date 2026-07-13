@@ -63,11 +63,7 @@ export class GestureEngine {
     // 2D thumb–index distance / hand size (wrist→middle-MCP), user-tunable.
     const ratioStart = this.config.ratioStart;
     const ratioEnd = ratioStart + 0.16;
-    // 3D tip-to-tip distance in meters, scaled with the user setting. Loose
-    // on purpose: it only exists to reject depth-separated fingers that
-    // merely overlap in the 2D image — the 2D ratio is the primary gate.
-    const distStart = 0.045 * (ratioStart / DEFAULT_PINCH_RATIO);
-    const distEnd = distStart + 0.025;
+
     const thumb = lm[4];
     const index = lm[8];
     const wrist = lm[0];
@@ -80,8 +76,8 @@ export class GestureEngine {
     const ratio =
       Math.hypot(thumb.x - index.x, thumb.y - index.y) / handScale;
 
-    // True 3D fingertip gap. If world landmarks are ever missing, mirror the
-    // 2D measure so the AND-gate degrades to ratio-only instead of locking.
+    // True 3D fingertip gap in meters. If world landmarks are ever missing,
+    // fallback to a scaled 2D estimation so the engine degrades gracefully.
     let worldDist = ratio * 0.09;
     if (world && world.length > 8) {
       const t = world[4];
@@ -89,8 +85,13 @@ export class GestureEngine {
       worldDist = Math.hypot(t.x - i.x, t.y - i.y, t.z - i.z);
     }
 
-    const touching = ratio < ratioStart && worldDist < distStart;
-    const separated = ratio > ratioEnd || worldDist > distEnd;
+    // Use a robust 8cm (0.08m) 3D threshold to reject depth overlaps.
+    // This accommodates Z-axis noise and tracking inaccuracies.
+    const touching = ratio < ratioStart && worldDist < 0.08;
+
+    // Once pinching, release only when fingers physically separate in 2D.
+    // This prevents accidental releases from Z-axis tracking jitter.
+    const separated = ratio > ratioEnd;
 
     if (!this.pinching) {
       if (touching) {
@@ -110,7 +111,7 @@ export class GestureEngine {
     // ring only fills when the tips are genuinely converging in 3D too.
     const pinchStrength = Math.min(
       progress(ratio, ratioStart, ratioEnd),
-      progress(worldDist, distStart, distEnd),
+      progress(worldDist, 0.04, 0.08),
     );
 
     // The perceived "pen tip" is between the thumb and index finger.
