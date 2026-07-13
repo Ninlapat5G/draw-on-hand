@@ -23,7 +23,7 @@ import { drawStroke, eraseSegment } from "./lib/strokes";
 import type { AppStatus, Stroke, Tool } from "./types";
 
 const DEFAULT_TOOL: Tool = { style: "pen", color: "#22d3ee", size: 10 };
-const PINCH_STORAGE_KEY = "aircanvas.pinchRatio";
+const PINCH_STORAGE_KEY = "draw-on-hand.pinchRatio";
 
 /** Per-hand tracking state so both hands can draw independently. */
 interface HandState {
@@ -496,7 +496,7 @@ export default function App() {
             ? "camera-denied"
             : "error",
         );
-        console.error("AirCanvas init failed:", err);
+        console.error("Draw on Hand init failed:", err);
       }
     };
 
@@ -626,7 +626,7 @@ export default function App() {
             </h2>
             <p>
               {status === "camera-denied"
-                ? "AirCanvas draws with your hand, so it needs your camera. Allow camera access in the browser's address bar, then try again."
+                ? "Draw on Hand draws with your hand, so it needs your camera. Allow camera access in the browser's address bar, then try again."
                 : "Hand tracking could not start. Check your connection and GPU support, then try again."}
             </p>
             <button className="retry-btn" onClick={() => location.reload()}>

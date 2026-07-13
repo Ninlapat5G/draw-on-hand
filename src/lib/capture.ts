@@ -49,7 +49,7 @@ export function savePng(
       .replace(/[:T]/g, "-")
       .slice(0, 19);
     a.href = url;
-    a.download = `aircanvas-${stamp}.png`;
+    a.download = `draw-on-hand-${stamp}.png`;
     a.click();
     URL.revokeObjectURL(url);
   }, "image/png");

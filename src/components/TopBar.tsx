@@ -36,7 +36,7 @@ export function TopBar({ status, handPresent }: TopBarProps) {
           <SparkleIcon />
         </div>
         <div className="brand-text">
-          <span className="brand-name">AirCanvas</span>
+          <span className="brand-name">Draw on Hand</span>
           <span className="brand-sub">Hand-tracking studio</span>
         </div>
       </div>
