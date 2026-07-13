@@ -72,14 +72,17 @@ export function getFaceTransform(
   const chin = { x: chinPt.x / canvasW, y: chinPt.y / canvasH };
 
   // Calculate width scale (eye-to-eye) and height scale (forehead-to-chin)
-  const widthScale = Math.hypot(rightEye.x - leftEye.x, rightEye.y - leftEye.y);
+  const widthScale = Math.hypot(leftEye.x - rightEye.x, leftEye.y - rightEye.y);
   const heightScale = Math.hypot(chin.x - forehead.x, chin.y - forehead.y);
 
   // Average width and height scales for a stable full-face scale multiplier
   const scale = (widthScale + heightScale) / 2;
 
-  // Calculate roll angle (Z-axis rotation)
-  const angle = Math.atan2(rightEye.y - leftEye.y, rightEye.x - leftEye.x);
+  // Calculate roll angle (Z-axis rotation) using eye coordinates on canvas
+  // Since leftEye.x on canvas is on the right side and rightEye.x is on the left,
+  // we point the direction vector from rightEye (left side) to leftEye (right side)
+  // to get the correct 0-centered angle on the screen canvas.
+  const angle = Math.atan2(leftEye.y - rightEye.y, leftEye.x - rightEye.x);
 
   return {
     x: nose.x,
