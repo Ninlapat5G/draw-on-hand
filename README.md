@@ -1,4 +1,4 @@
-# 🎨 AirCanvas
+# 🎨 Draw on Hand
 
 Draw in the air with your hands — a zero-backend React app powered by
 [MediaPipe Hand Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker)
