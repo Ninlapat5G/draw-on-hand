@@ -1,0 +1,642 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { HandLandmarker } from "@mediapipe/tasks-vision";
+import { ActionsPanel } from "./components/ActionsPanel";
+import { RadialDock } from "./components/RadialDock";
+import { TopBar } from "./components/TopBar";
+import { AlertIcon } from "./components/icons";
+import { savePng } from "./lib/capture";
+import {
+  DEFAULT_PINCH_RATIO,
+  GestureEngine,
+  MAX_PINCH_RATIO,
+  MIN_PINCH_RATIO,
+  type PinchConfig,
+} from "./lib/gestures";
+import { HandUiController, isOverUi, type UiState } from "./lib/handUi";
+import { drawHandSkeleton } from "./lib/skeleton";
+import {
+  createHandLandmarker,
+  startCamera,
+  videoPointToCanvas,
+} from "./lib/tracking";
+import { drawStroke, eraseSegment } from "./lib/strokes";
+import type { AppStatus, Stroke, Tool } from "./types";
+
+const DEFAULT_TOOL: Tool = { style: "pen", color: "#22d3ee", size: 10 };
+const PINCH_STORAGE_KEY = "aircanvas.pinchRatio";
+
+/** Per-hand tracking state so both hands can draw independently. */
+interface HandState {
+  gesture: GestureEngine;
+  stroke: Stroke | null;
+  prevPinch: boolean;
+  /** pinch began over the UI — never leave a stroke behind */
+  pinchFromUi: boolean;
+  /** pinch began on the canvas — never turn into a UI click */
+  pinchFromCanvas: boolean;
+}
+
+function loadPinchRatio(): number {
+  const stored = localStorage.getItem(PINCH_STORAGE_KEY);
+  if (stored === null) return DEFAULT_PINCH_RATIO;
+  const raw = Number(stored);
+  if (!Number.isFinite(raw)) return DEFAULT_PINCH_RATIO;
+  return Math.min(MAX_PINCH_RATIO, Math.max(MIN_PINCH_RATIO, raw));
+}
+
+export default function App() {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const baseRef = useRef<HTMLCanvasElement>(null);
+  const liveRef = useRef<HTMLCanvasElement>(null);
+
+  const strokesRef = useRef<Stroke[]>([]);
+  const pinchConfigRef = useRef<PinchConfig>({ ratioStart: loadPinchRatio() });
+  const handsRef = useRef(new Map<string, HandState>());
+  const uiRef = useRef(new HandUiController());
+  /** which hand currently drives the UI controller */
+  const uiHandRef = useRef<string | null>(null);
+  const toolRef = useRef<Tool>(DEFAULT_TOOL);
+  const handPresentRef = useRef(false);
+  const hasDrawnRef = useRef(false);
+
+  const [tool, setTool] = useState<Tool>(DEFAULT_TOOL);
+  const [status, setStatus] = useState<AppStatus>("loading-model");
+  const [handPresent, setHandPresent] = useState(false);
+  const [strokeCount, setStrokeCount] = useState(0);
+  const [hasDrawn, setHasDrawn] = useState(false);
+  const [cameraVisible, setCameraVisible] = useState(true);
+  const [flashKey, setFlashKey] = useState(0);
+  const [pinchRatio, setPinchRatio] = useState(
+    pinchConfigRef.current.ratioStart,
+  );
+
+  // Floating panels: the radial dock (anchored by its center point) and the
+  // actions panel (top-left point; null = its default CSS position).
+  const [dockPos, setDockPos] = useState(() => ({
+    x: window.innerWidth / 2,
+    y: window.innerHeight - 200,
+  }));
+  const [dockExpanded, setDockExpanded] = useState(true);
+  const [actionsPos, setActionsPos] = useState<{ x: number; y: number } | null>(
+    null,
+  );
+  const actionsRef = useRef<HTMLDivElement>(null);
+
+  const handlePinchRatio = useCallback((value: number) => {
+    const v = Math.min(MAX_PINCH_RATIO, Math.max(MIN_PINCH_RATIO, value));
+    pinchConfigRef.current.ratioStart = v;
+    setPinchRatio(v);
+    localStorage.setItem(PINCH_STORAGE_KEY, String(v));
+  }, []);
+
+  const movePanel = useCallback((id: string, dx: number, dy: number) => {
+    if (id === "dock") {
+      setDockPos((p) => ({
+        x: Math.min(window.innerWidth - 48, Math.max(48, p.x + dx)),
+        y: Math.min(window.innerHeight - 48, Math.max(48, p.y + dy)),
+      }));
+    } else if (id === "actions") {
+      setActionsPos((p) => {
+        const base = p ?? (() => {
+          const r = actionsRef.current?.getBoundingClientRect();
+          return r ? { x: r.left, y: r.top } : null;
+        })();
+        if (!base) return p;
+        return {
+          x: Math.min(window.innerWidth - 60, Math.max(8, base.x + dx)),
+          y: Math.min(window.innerHeight - 60, Math.max(8, base.y + dy)),
+        };
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    toolRef.current = tool;
+  }, [tool]);
+
+  /** Resize both canvases to the viewport (device-pixel exact) and set the
+   * context transform so all drawing code works in CSS pixels. */
+  const sizeCanvases = useCallback(() => {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    for (const canvas of [baseRef.current, liveRef.current]) {
+      if (!canvas) continue;
+      const w = canvas.clientWidth;
+      const h = canvas.clientHeight;
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+      canvas.getContext("2d")?.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+  }, []);
+
+  const replay = useCallback(() => {
+    const base = baseRef.current;
+    const ctx = base?.getContext("2d");
+    if (!base || !ctx) return;
+    const w = base.clientWidth;
+    const h = base.clientHeight;
+    ctx.clearRect(0, 0, w, h);
+    for (const stroke of strokesRef.current) {
+      drawStroke(ctx, stroke, w, h);
+    }
+  }, []);
+
+  useEffect(() => {
+    sizeCanvases();
+    const onResize = () => {
+      sizeCanvases();
+      replay();
+      // Keep floating panels on screen after a resize.
+      setDockPos((p) => ({
+        x: Math.min(window.innerWidth - 48, Math.max(48, p.x)),
+        y: Math.min(window.innerHeight - 48, Math.max(48, p.y)),
+      }));
+      setActionsPos((p) =>
+        p
+          ? {
+              x: Math.min(window.innerWidth - 60, Math.max(8, p.x)),
+              y: Math.min(window.innerHeight - 60, Math.max(8, p.y)),
+            }
+          : p,
+      );
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [sizeCanvases, replay]);
+
+  /** Move a finished stroke from a hand onto the committed layer. */
+  const commitStroke = useCallback((state: HandState) => {
+    const stroke = state.stroke;
+    if (!stroke) return;
+    state.stroke = null;
+
+    const base = baseRef.current;
+    const ctx = base?.getContext("2d");
+    if (base && ctx && stroke.style !== "eraser") {
+      // Eraser strokes were already applied to the base incrementally.
+      drawStroke(ctx, stroke, base.clientWidth, base.clientHeight);
+    }
+    strokesRef.current.push(stroke);
+    setStrokeCount(strokesRef.current.length);
+  }, []);
+
+  // ---------- Tracking pipeline ----------
+
+  useEffect(() => {
+    let cancelled = false;
+    let rafId = 0;
+    let landmarker: HandLandmarker | null = null;
+    let stream: MediaStream | null = null;
+
+    const drawCursor = (
+      ctx: CanvasRenderingContext2D,
+      x: number,
+      y: number,
+      ui: UiState,
+      pinching: boolean,
+      strength: number,
+    ) => {
+      const t = toolRef.current;
+      const color = ui.overUi
+        ? "rgba(255,255,255,0.95)"
+        : t.style === "eraser"
+          ? "rgba(255,255,255,0.95)"
+          : t.color;
+      const radius = ui.overUi
+        ? 11
+        : Math.max(t.size * 0.6, 7) + (1 - strength) * 8;
+
+      // Every ring gets a dark under-stroke first so the cursor stays
+      // visible on top of bright glass panels and light video backgrounds.
+      const ring = (from: number, to: number, alpha: number) => {
+        ctx.save();
+        ctx.lineCap = "round";
+        ctx.globalAlpha = alpha;
+        ctx.strokeStyle = "rgba(8, 10, 16, 0.7)";
+        ctx.lineWidth = 4.5;
+        ctx.beginPath();
+        ctx.arc(x, y, radius, from, to);
+        ctx.stroke();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2.2;
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 12;
+        ctx.beginPath();
+        ctx.arc(x, y, radius, from, to);
+        ctx.stroke();
+        ctx.restore();
+      };
+
+      ctx.save();
+      if (pinching) {
+        ring(0, Math.PI * 2, 1);
+        ctx.beginPath();
+        ctx.arc(x, y, Math.max(t.size * 0.3, 3.5), 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.shadowColor = "rgba(8, 10, 16, 0.8)";
+        ctx.shadowBlur = 5;
+        ctx.fill();
+      } else {
+        // Faint full ring plus a bright arc showing pinch progress, so the
+        // user can see how close their fingers are to registering a touch.
+        ring(0, Math.PI * 2, 0.4);
+        if (strength > 0.02) {
+          ring(-Math.PI / 2, -Math.PI / 2 + strength * Math.PI * 2, 1);
+        }
+        // Center dot marking the exact selection point.
+        ctx.beginPath();
+        ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.shadowColor = "rgba(8, 10, 16, 0.8)";
+        ctx.shadowBlur = 4;
+        ctx.fill();
+      }
+      ctx.restore();
+
+      // Gesture readout under the cursor, on a dark chip for readability.
+      const label =
+        ui.mode === "drag"
+          ? "MOVE"
+          : ui.mode === "slider"
+            ? "ADJUST"
+            : ui.overUi
+              ? pinching
+                ? "CLICK"
+                : "HOVER"
+              : pinching
+                ? t.style === "eraser"
+                  ? "ERASING"
+                  : "DRAWING"
+                : "";
+      if (label) {
+        ctx.save();
+        ctx.font = '600 10px "Outfit", sans-serif';
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        const tw = ctx.measureText(label).width;
+        const cy = y + radius + 16;
+        ctx.fillStyle = "rgba(8, 10, 16, 0.72)";
+        ctx.beginPath();
+        ctx.roundRect(x - tw / 2 - 7, cy - 9, tw + 14, 18, 9);
+        ctx.fill();
+        ctx.fillStyle = "rgba(255,255,255,0.92)";
+        ctx.fillText(label, x, cy);
+        ctx.restore();
+      }
+    };
+
+    const handleFrame = () => {
+      const video = videoRef.current;
+      const live = liveRef.current;
+      const base = baseRef.current;
+      if (!video || !live || !base || !landmarker) return;
+
+      const result = landmarker.detectForVideo(video, performance.now());
+      const lctx = live.getContext("2d");
+      const bctx = base.getContext("2d");
+      if (!lctx || !bctx) return;
+
+      const w = live.clientWidth;
+      const h = live.clientHeight;
+      lctx.clearRect(0, 0, w, h);
+
+      // Stable per-hand keys from handedness (Left/Right), so gesture state
+      // follows the same physical hand even when detection order flips.
+      const seen = new Set<string>();
+      const detected = result.landmarks.map((lm, i) => {
+        let key = result.handedness?.[i]?.[0]?.categoryName ?? `hand-${i}`;
+        if (seen.has(key)) key = `${key}-2`;
+        seen.add(key);
+        return { key, lm, world: result.worldLandmarks?.[i] };
+      });
+
+      // Hands that disappeared: commit their strokes, free their state.
+      for (const [key, state] of handsRef.current) {
+        if (!seen.has(key)) {
+          state.prevPinch = false;
+          commitStroke(state);
+          handsRef.current.delete(key);
+          if (uiHandRef.current === key) {
+            uiRef.current.reset();
+            uiHandRef.current = null;
+          }
+        }
+      }
+
+      if (detected.length === 0) {
+        if (handPresentRef.current) {
+          handPresentRef.current = false;
+          setHandPresent(false);
+        }
+        return;
+      }
+      if (!handPresentRef.current) {
+        handPresentRef.current = true;
+        setHandPresent(true);
+      }
+
+      const frames = detected.map(({ key, lm, world }) => {
+        let state = handsRef.current.get(key);
+        if (!state) {
+          state = {
+            gesture: new GestureEngine(pinchConfigRef.current),
+            stroke: null,
+            prevPinch: false,
+            pinchFromUi: false,
+            pinchFromCanvas: false,
+          };
+          handsRef.current.set(key, state);
+        }
+        const hand = state.gesture.update(lm, world);
+        const pt = videoPointToCanvas(
+          hand.x,
+          hand.y,
+          video.videoWidth,
+          video.videoHeight,
+          w,
+          h,
+        );
+        const overUi = isOverUi(pt.x, pt.y);
+
+        // Record where each pinch began: a UI pinch must never draw, a
+        // canvas pinch must never click a control it drifts across.
+        if (hand.pinching && !state.prevPinch) {
+          state.pinchFromUi = overUi;
+          state.pinchFromCanvas = !overUi;
+        } else if (!hand.pinching) {
+          state.pinchFromUi = false;
+          state.pinchFromCanvas = false;
+        }
+        state.prevPinch = hand.pinching;
+
+        return { key, lm, state, hand, pt, overUi };
+      });
+
+      // Exactly one hand drives the UI controller per frame: the hand that
+      // holds an active drag/slider grab, else the first hand over the UI.
+      let uiFrame =
+        uiRef.current.isEngaged() && uiHandRef.current
+          ? frames.find((f) => f.key === uiHandRef.current)
+          : undefined;
+      if (!uiFrame) {
+        uiFrame = frames.find((f) => f.overUi || f.key === uiHandRef.current);
+      }
+
+      let uiState: UiState = { overUi: false, mode: "idle" };
+      if (uiFrame) {
+        uiHandRef.current = uiFrame.key;
+        uiState = uiRef.current.update(
+          uiFrame.pt.x,
+          uiFrame.pt.y,
+          uiFrame.hand.pinching && !uiFrame.state.pinchFromCanvas,
+        );
+        if (uiState.mode === "drag" && uiState.dragId) {
+          movePanel(uiState.dragId, uiState.dragDx ?? 0, uiState.dragDy ?? 0);
+        }
+      } else {
+        uiHandRef.current = null;
+        uiRef.current.clearHover();
+      }
+
+      const t = toolRef.current;
+      const accent = t.style === "eraser" ? "#e2e8f0" : t.color;
+
+      for (const f of frames) {
+        const isUiHand = f === uiFrame;
+        const handUiState: UiState = isUiHand
+          ? uiState
+          : { overUi: f.overUi, mode: f.overUi ? "hover" : "idle" };
+        const blocked = handUiState.overUi || f.state.pinchFromUi;
+
+        if (f.hand.pinching && !blocked) {
+          let stroke = f.state.stroke;
+          if (!stroke) {
+            stroke = {
+              style: t.style,
+              color: t.color,
+              size: t.size,
+              points: [],
+            };
+            f.state.stroke = stroke;
+          }
+
+          const nx = f.pt.x / w;
+          const ny = f.pt.y / h;
+          const last = stroke.points[stroke.points.length - 1];
+          const farEnough =
+            !last || Math.hypot((nx - last.x) * w, (ny - last.y) * h) > 1.2;
+          if (farEnough) {
+            stroke.points.push({ x: nx, y: ny });
+            if (stroke.style === "eraser") {
+              eraseSegment(bctx, stroke, w, h);
+            }
+          }
+
+          if (stroke.style !== "eraser") {
+            drawStroke(lctx, stroke, w, h);
+          }
+
+          if (!hasDrawnRef.current) {
+            hasDrawnRef.current = true;
+            setHasDrawn(true);
+          }
+        } else {
+          commitStroke(f.state);
+        }
+
+        drawHandSkeleton(
+          lctx,
+          f.lm,
+          video.videoWidth,
+          video.videoHeight,
+          w,
+          h,
+          accent,
+          f.hand.pinching,
+        );
+        drawCursor(
+          lctx,
+          f.pt.x,
+          f.pt.y,
+          handUiState,
+          f.hand.pinching,
+          f.hand.pinchStrength,
+        );
+      }
+    };
+
+    const init = async () => {
+      try {
+        setStatus("loading-model");
+        landmarker = await createHandLandmarker();
+        if (cancelled) return;
+
+        setStatus("starting-camera");
+        const video = videoRef.current;
+        if (!video) return;
+        stream = await startCamera(video);
+        if (cancelled) return;
+
+        setStatus("ready");
+        let lastVideoTime = -1;
+        const loop = () => {
+          if (cancelled) return;
+          const v = videoRef.current;
+          if (v && v.readyState >= 2 && v.currentTime !== lastVideoTime) {
+            lastVideoTime = v.currentTime;
+            handleFrame();
+          }
+          rafId = requestAnimationFrame(loop);
+        };
+        loop();
+      } catch (err) {
+        if (cancelled) return;
+        const name = err instanceof DOMException ? err.name : "";
+        setStatus(
+          name === "NotAllowedError" || name === "NotFoundError"
+            ? "camera-denied"
+            : "error",
+        );
+        console.error("AirCanvas init failed:", err);
+      }
+    };
+
+    void init();
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(rafId);
+      stream?.getTracks().forEach((t) => t.stop());
+      landmarker?.close();
+    };
+  }, [commitStroke, movePanel]);
+
+  // ---------- Actions ----------
+
+  const undo = useCallback(() => {
+    if (strokesRef.current.length === 0) return;
+    strokesRef.current.pop();
+    setStrokeCount(strokesRef.current.length);
+    replay();
+  }, [replay]);
+
+  const clearAll = useCallback(() => {
+    strokesRef.current = [];
+    for (const state of handsRef.current.values()) {
+      state.stroke = null;
+    }
+    setStrokeCount(0);
+    replay();
+  }, [replay]);
+
+  const handleSave = useCallback((includeCamera: boolean) => {
+    const base = baseRef.current;
+    if (!base) return;
+    savePng(base, videoRef.current, includeCamera);
+    setFlashKey((k) => k + 1);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        undo();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [undo]);
+
+  // ---------- Render ----------
+
+  const loading = status === "loading-model" || status === "starting-camera";
+
+  return (
+    <div className="stage">
+      <div className="backdrop" />
+      <video
+        ref={videoRef}
+        className={`cam${cameraVisible ? "" : " hidden"}`}
+        playsInline
+        muted
+      />
+      <div className="dim" />
+      <canvas ref={baseRef} className="layer" />
+      <canvas ref={liveRef} className="layer live" />
+
+      <TopBar status={status} handPresent={handPresent} />
+
+      <ActionsPanel
+        innerRef={actionsRef}
+        pos={actionsPos}
+        onMove={(dx, dy) => movePanel("actions", dx, dy)}
+        canUndo={strokeCount > 0}
+        cameraVisible={cameraVisible}
+        pinchRatio={pinchRatio}
+        onPinchRatio={handlePinchRatio}
+        onUndo={undo}
+        onClear={clearAll}
+        onToggleCamera={() => setCameraVisible((v) => !v)}
+        onSave={handleSave}
+      />
+
+      {status === "ready" && !hasDrawn && (
+        <div className="hint glass">
+          <span className="emoji">🤏</span>
+          Touch your thumb &amp; index tips to draw — pinch buttons to click,
+          pinch-hold the hub to move it
+        </div>
+      )}
+
+      <RadialDock
+        tool={tool}
+        onChange={setTool}
+        expanded={dockExpanded}
+        onToggle={() => setDockExpanded((v) => !v)}
+        pos={dockPos}
+        onMove={(dx, dy) => movePanel("dock", dx, dy)}
+      />
+
+      {loading && (
+        <div className="overlay-center">
+          <div className="overlay-card glass">
+            <div className="spinner" />
+            <h2>
+              {status === "loading-model"
+                ? "Loading hand tracking…"
+                : "Starting camera…"}
+            </h2>
+            <p>
+              Everything runs locally in your browser — no video ever leaves
+              your device.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {(status === "camera-denied" || status === "error") && (
+        <div className="overlay-center">
+          <div className="overlay-card glass">
+            <div className="overlay-icon">
+              <AlertIcon />
+            </div>
+            <h2>
+              {status === "camera-denied"
+                ? "Camera access needed"
+                : "Something went wrong"}
+            </h2>
+            <p>
+              {status === "camera-denied"
+                ? "AirCanvas draws with your hand, so it needs your camera. Allow camera access in the browser's address bar, then try again."
+                : "Hand tracking could not start. Check your connection and GPU support, then try again."}
+            </p>
+            <button className="retry-btn" onClick={() => location.reload()}>
+              Try again
+            </button>
+          </div>
+        </div>
+      )}
+
+      {flashKey > 0 && <div key={flashKey} className="flash" />}
+    </div>
+  );
+}

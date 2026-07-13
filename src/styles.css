@@ -1,0 +1,953 @@
+:root {
+  --bg: #0a0c12;
+  --panel: rgba(13, 16, 26, 0.62);
+  --panel-strong: rgba(13, 16, 26, 0.85);
+  --border: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --text: #eef1f8;
+  --muted: rgba(238, 241, 248, 0.55);
+  --accent-a: #8b5cf6;
+  --accent-b: #22d3ee;
+  --danger: #f87171;
+  --radius-lg: 20px;
+  --radius-md: 14px;
+  --radius-sm: 10px;
+  --shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Outfit", system-ui, -apple-system, "Segoe UI", sans-serif;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+/* ---------- Stage ---------- */
+
+.stage {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+}
+
+.cam {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+  filter: saturate(0.95) brightness(0.9);
+  transition: opacity 0.4s ease;
+}
+
+.cam.hidden {
+  opacity: 0;
+}
+
+.backdrop {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(1200px 700px at 20% -10%, rgba(139, 92, 246, 0.16), transparent 60%),
+    radial-gradient(1000px 700px at 90% 110%, rgba(34, 211, 238, 0.13), transparent 60%),
+    linear-gradient(160deg, #0b0e1a, #101423);
+}
+
+.dim {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(to bottom, rgba(6, 8, 15, 0.55), transparent 22%),
+    linear-gradient(to top, rgba(6, 8, 15, 0.6), transparent 30%),
+    rgba(6, 8, 15, 0.18);
+}
+
+.layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* The live layer (skeleton + cursor) sits ABOVE the toolbar/topbar so the
+   fingertip cursor never disappears behind panels while picking controls.
+   pointer-events: none keeps mouse & elementFromPoint working through it. */
+.layer.live {
+  z-index: 35;
+}
+
+/* ---------- Glass primitives ---------- */
+
+.glass {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(18px) saturate(1.3);
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  box-shadow: var(--shadow);
+}
+
+/* ---------- Top bar (brand + status, static) ---------- */
+
+.topbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 22px;
+  z-index: 20;
+  pointer-events: none;
+}
+
+.topbar > * {
+  pointer-events: auto;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 16px 9px 11px;
+  border-radius: 999px;
+}
+
+.brand-mark {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, var(--accent-a), var(--accent-b));
+  box-shadow: 0 4px 18px rgba(139, 92, 246, 0.45);
+}
+
+.brand-mark svg {
+  width: 18px;
+  height: 18px;
+}
+
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+
+.brand-name {
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.02em;
+  background: linear-gradient(90deg, #c4b5fd, #67e8f9);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.brand-sub {
+  font-size: 10.5px;
+  color: var(--muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.status-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #64748b;
+  flex-shrink: 0;
+}
+
+.status-dot.on {
+  background: #34d399;
+  box-shadow: 0 0 10px rgba(52, 211, 153, 0.9);
+  animation: pulse 1.8s ease-in-out infinite;
+}
+
+.status-dot.warn {
+  background: #fbbf24;
+}
+
+@keyframes pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.25); opacity: 0.75; }
+}
+
+/* ---------- Shared buttons ---------- */
+
+.icon-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-sm);
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease;
+}
+
+.icon-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--text);
+}
+
+.icon-btn:active:not(:disabled) {
+  transform: scale(0.93);
+}
+
+.icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.icon-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.icon-btn.danger:hover:not(:disabled) {
+  color: var(--danger);
+  background: rgba(248, 113, 113, 0.12);
+}
+
+/* ---------- Actions panel (floating, draggable, collapsible) ---------- */
+
+.actions-panel {
+  position: absolute;
+  top: 84px;
+  right: 22px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 5px;
+  border-radius: var(--radius-md);
+  z-index: 20;
+}
+
+.actions-panel .grip {
+  width: 26px;
+  cursor: grab;
+  touch-action: none;
+}
+
+.actions-panel .grip:active {
+  cursor: grabbing;
+}
+
+.actions-panel .grip svg {
+  width: 15px;
+  height: 15px;
+}
+
+.panel-items {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 340px;
+  overflow: hidden;
+  opacity: 1;
+  transition:
+    max-width 0.38s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.25s ease;
+}
+
+.actions-panel[data-collapsed="true"] .panel-items {
+  max-width: 0;
+  opacity: 0;
+}
+
+.collapse-btn {
+  width: 26px;
+}
+
+.collapse-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* ---------- Save button ---------- */
+
+.save-wrap {
+  position: relative;
+}
+
+.save-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 18px;
+  margin-left: 4px;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  font-size: 14px;
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent-a), var(--accent-b));
+  box-shadow: 0 8px 26px rgba(99, 102, 241, 0.45);
+  transition: transform 0.12s ease, box-shadow 0.15s ease, filter 0.15s ease;
+}
+
+.save-btn:hover {
+  filter: brightness(1.08);
+  box-shadow: 0 10px 32px rgba(99, 102, 241, 0.6);
+}
+
+.save-btn:active {
+  transform: scale(0.96);
+}
+
+.save-btn svg {
+  width: 17px;
+  height: 17px;
+}
+
+.save-menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  min-width: 240px;
+  padding: 6px;
+  border-radius: var(--radius-md);
+  background: var(--panel-strong);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: var(--shadow);
+  animation: pop 0.14s ease;
+  z-index: 30;
+}
+
+@keyframes pop {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.save-menu button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13.5px;
+  font-weight: 500;
+  text-align: left;
+  color: var(--text);
+  transition: background 0.13s ease;
+}
+
+.save-menu button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.save-menu button svg {
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.save-menu .menu-sub {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+/* ---------- Pinch settings popover ---------- */
+
+.settings-menu {
+  padding: 14px;
+  min-width: 236px;
+}
+
+.settings-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 6px;
+}
+
+.settings-label {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.settings-value {
+  font-size: 11.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+input[type="range"].settings-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 26px;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type="range"].settings-slider::-webkit-slider-runnable-track {
+  height: 5px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(139, 92, 246, 0.85), rgba(34, 211, 238, 0.85));
+}
+
+input[type="range"].settings-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 17px;
+  height: 17px;
+  margin-top: -6px;
+  border-radius: 50%;
+  background: #fff;
+  border: none;
+  box-shadow: 0 2px 9px rgba(0, 0, 0, 0.5);
+  transition: transform 0.12s ease;
+}
+
+input[type="range"].settings-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+}
+
+input[type="range"].settings-slider::-moz-range-track {
+  height: 5px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(139, 92, 246, 0.85), rgba(34, 211, 238, 0.85));
+}
+
+input[type="range"].settings-slider::-moz-range-thumb {
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: #fff;
+  border: none;
+  box-shadow: 0 2px 9px rgba(0, 0, 0, 0.5);
+}
+
+.settings-scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.settings-hint {
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.settings-reset {
+  margin-top: 10px;
+  width: 100%;
+  padding: 8px 0;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--border);
+  transition: background 0.13s ease;
+}
+
+.settings-reset:hover,
+.settings-reset.hand-hover {
+  background: rgba(255, 255, 255, 0.13);
+}
+
+/* ---------- Radial dock ---------- */
+
+.dock {
+  position: absolute;
+  width: 0;
+  height: 0;
+  z-index: 20;
+}
+
+.dock-ring {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, -50%) scale(0.5);
+  border-radius: 50%;
+  border: 1.5px dashed rgba(255, 255, 255, 0.13);
+  opacity: 0;
+  transition:
+    transform 0.45s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.3s ease;
+  pointer-events: none;
+}
+
+.dock[data-expanded="true"] .dock-ring {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+/* Each control flies from the hub to its ring slot with a springy stagger. */
+.dock-item {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, -50%) translate(0, 0) scale(0.2);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform 0.42s cubic-bezier(0.34, 1.56, 0.64, 1) var(--delay, 0ms),
+    opacity 0.25s ease var(--delay, 0ms);
+}
+
+.dock[data-expanded="true"] .dock-item {
+  transform: translate(-50%, -50%) translate(var(--tx), var(--ty)) scale(1);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.dock-btn {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35);
+  transition:
+    transform 0.15s ease,
+    color 0.15s ease,
+    background 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.dock-btn svg {
+  width: 19px;
+  height: 19px;
+}
+
+.dock-btn:hover,
+.dock-btn.hand-hover {
+  color: var(--text);
+  transform: scale(1.14);
+}
+
+.dock-btn.active {
+  color: #fff;
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.9), rgba(34, 211, 238, 0.8));
+  border-color: transparent;
+  box-shadow: 0 6px 20px rgba(99, 102, 241, 0.5);
+}
+
+.size-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35);
+  transition:
+    transform 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.size-btn .size-dot {
+  border-radius: 50%;
+  background: rgba(238, 241, 248, 0.85);
+  transition: background 0.15s ease;
+}
+
+.size-btn:hover,
+.size-btn.hand-hover {
+  transform: scale(1.14);
+}
+
+.size-btn.active {
+  border-color: rgba(255, 255, 255, 0.7);
+  box-shadow:
+    0 0 0 3px rgba(139, 92, 246, 0.35),
+    0 6px 20px rgba(99, 102, 241, 0.4);
+}
+
+.size-btn.active .size-dot {
+  background: #fff;
+}
+
+/* Hub */
+
+.dock-hub {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, -50%);
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  border: 2px solid transparent;
+  background:
+    linear-gradient(var(--panel-strong), var(--panel-strong)) padding-box,
+    linear-gradient(135deg, var(--accent-a), var(--accent-b)) border-box;
+  box-shadow: var(--shadow), 0 0 28px rgba(139, 92, 246, 0.3);
+  cursor: grab;
+  touch-action: none;
+  transition: transform 0.18s ease, box-shadow 0.2s ease;
+  z-index: 1;
+}
+
+.dock-hub:hover,
+.dock-hub.hand-hover {
+  transform: translate(-50%, -50%) scale(1.09);
+  box-shadow: var(--shadow), 0 0 36px rgba(139, 92, 246, 0.5);
+}
+
+.dock-hub:active {
+  cursor: grabbing;
+}
+
+.hub-face {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  transition:
+    opacity 0.22s ease,
+    transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.hub-face svg {
+  width: 22px;
+  height: 22px;
+  color: var(--text);
+}
+
+.hub-dot {
+  border-radius: 50%;
+  box-shadow: 0 0 14px rgba(255, 255, 255, 0.25);
+}
+
+.hub-face.close {
+  opacity: 0;
+  transform: rotate(-90deg) scale(0.4);
+}
+
+.dock[data-expanded="true"] .hub-face.close {
+  opacity: 1;
+  transform: rotate(0deg) scale(1);
+}
+
+.dock[data-expanded="true"] .hub-face.preview {
+  opacity: 0;
+  transform: rotate(90deg) scale(0.4);
+}
+
+/* ---------- Color swatches (used on the dock's outer ring) ---------- */
+
+.swatch {
+  width: 31px;
+  height: 31px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  position: relative;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  transition: transform 0.13s ease, border-color 0.13s ease, box-shadow 0.13s ease;
+}
+
+.swatch:hover {
+  transform: scale(1.15);
+}
+
+.swatch.active {
+  border-color: #fff;
+  transform: scale(1.18);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.18), 0 0 14px var(--swatch-glow, transparent);
+}
+
+.swatch-custom {
+  width: 31px;
+  height: 31px;
+  border-radius: 50%;
+  overflow: hidden;
+  position: relative;
+  background: conic-gradient(#f87171, #fbbf24, #34d399, #22d3ee, #8b5cf6, #f87171);
+  border: 2px solid transparent;
+  display: grid;
+  place-items: center;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  transition: transform 0.13s ease, border-color 0.13s ease;
+}
+
+.swatch-custom:hover {
+  transform: scale(1.15);
+}
+
+.swatch-custom.active {
+  border-color: #fff;
+  transform: scale(1.18);
+}
+
+.swatch-custom input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.swatch-custom .inner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--current, #fff);
+  border: 1.5px solid rgba(255, 255, 255, 0.7);
+  pointer-events: none;
+}
+
+/* ---------- Hand-driven UI states ----------
+   Mirrors the :hover styles so the fingertip cursor gives the same
+   feedback as a mouse, plus a press pulse when a pinch-click lands. */
+
+.icon-btn.hand-hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--text);
+}
+
+.icon-btn.danger.hand-hover:not(:disabled) {
+  color: var(--danger);
+  background: rgba(248, 113, 113, 0.12);
+}
+
+.swatch.hand-hover,
+.swatch-custom.hand-hover {
+  transform: scale(1.18);
+  border-color: rgba(255, 255, 255, 0.55);
+}
+
+.save-btn.hand-hover {
+  filter: brightness(1.08);
+  box-shadow: 0 10px 32px rgba(99, 102, 241, 0.6);
+}
+
+.save-menu button.hand-hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.retry-btn.hand-hover {
+  filter: brightness(1.08);
+}
+
+.hand-press {
+  animation: handPress 0.24s ease;
+}
+
+@keyframes handPress {
+  0% { transform: scale(0.88); }
+  55% { transform: scale(1.06); }
+  100% { transform: scale(1); }
+}
+
+/* The hub keeps its centering translate during the press pulse. */
+.dock-hub.hand-press {
+  animation: hubPress 0.24s ease;
+}
+
+@keyframes hubPress {
+  0% { transform: translate(-50%, -50%) scale(0.88); }
+  55% { transform: translate(-50%, -50%) scale(1.06); }
+  100% { transform: translate(-50%, -50%) scale(1); }
+}
+
+/* ---------- Hint / overlays ---------- */
+
+.hint {
+  position: absolute;
+  left: 50%;
+  top: 84px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 20px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  z-index: 15;
+  animation: floatIn 0.5s ease;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.hint .emoji {
+  font-size: 19px;
+}
+
+@keyframes floatIn {
+  from { opacity: 0; transform: translate(-50%, 12px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.overlay-center {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  z-index: 40;
+}
+
+.overlay-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 38px 46px;
+  border-radius: 24px;
+  text-align: center;
+  max-width: 420px;
+}
+
+.overlay-card h2 {
+  font-size: 19px;
+  font-weight: 700;
+}
+
+.overlay-card p {
+  font-size: 13.5px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.spinner {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.12);
+  border-top-color: var(--accent-b);
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.overlay-icon {
+  width: 54px;
+  height: 54px;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  background: rgba(248, 113, 113, 0.14);
+  color: var(--danger);
+}
+
+.overlay-icon svg {
+  width: 26px;
+  height: 26px;
+}
+
+.retry-btn {
+  margin-top: 4px;
+  padding: 10px 24px;
+  border-radius: var(--radius-md);
+  font-weight: 600;
+  font-size: 13.5px;
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent-a), var(--accent-b));
+  transition: filter 0.15s ease, transform 0.12s ease;
+}
+
+.retry-btn:hover {
+  filter: brightness(1.08);
+}
+
+.retry-btn:active {
+  transform: scale(0.96);
+}
+
+/* Flash effect when saving */
+
+.flash {
+  position: absolute;
+  inset: 0;
+  background: #fff;
+  pointer-events: none;
+  z-index: 50;
+  animation: flashFade 0.45s ease forwards;
+}
+
+@keyframes flashFade {
+  from { opacity: 0.7; }
+  to { opacity: 0; }
+}
+
+/* ---------- Responsive ---------- */
+
+@media (max-width: 760px) {
+  .brand-sub,
+  .brand-text {
+    display: none;
+  }
+
+  .brand {
+    padding: 8px;
+  }
+
+  .actions-panel {
+    top: 72px;
+    right: 12px;
+  }
+
+  .hint {
+    top: 72px;
+    font-size: 12.5px;
+    white-space: normal;
+    text-align: center;
+    max-width: 88vw;
+  }
+}
