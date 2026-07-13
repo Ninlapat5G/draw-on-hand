@@ -1,44 +1,42 @@
 # 🎨 Draw on Hand
 
-Draw in the air with your hands — a zero-backend React app powered by
-[MediaPipe Hand Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker)
-running entirely in the browser (WASM/GPU). No server, no data leaves your device.
+วาดภาพกลางอากาศด้วยมือของคุณเอง — เว็บแอปพลิเคชันที่พัฒนาด้วย React แบบไม่มีระบบหลังบ้าน (Zero-Backend) ขับเคลื่อนด้วยระบบตรวจจับและติดตามมือ [MediaPipe Hand Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker) ประมวลผลบนเบราว์เซอร์ทั้งหมดผ่าน WASM และ GPU ปลอดภัย ไร้เซิร์ฟเวอร์ และไม่มีการส่งข้อมูลใดๆ ออกนอกอุปกรณ์ของคุณ
 
-## How to use
+## วิธีการใช้งาน
 
-- **🤏 Pinch** — touch your thumb and index fingertips together to draw; release to stop. Contact is verified in real 3D space (world landmarks), so a tilted hand can't false-trigger. **Both hands work at once.**
-- **Radial dock** — the circular hub at the bottom opens two rings of tools: brush styles (Pen / Neon / Marker / Rainbow / Eraser) on the inner ring, colors and stroke sizes on the outer ring. Pinch the hub to expand/collapse; pinch-hold and move your hand (or mouse-drag) to reposition it.
-- **Hand-driven UI** — hover any control with your fingertip and pinch to click. A live skeleton, pinch-progress ring, and status label (HOVER / CLICK / DRAWING / MOVE) show exactly what the tracker sees.
-- **Actions panel** (top right, draggable & collapsible) — Undo (`Ctrl+Z`), Clear, hide camera, and **Save** (PNG composited over a camera snapshot, or strokes alone on a dark backdrop).
-- **⚙ Pinch settings** — adjust how close your fingertips must get to register a pinch (persisted in `localStorage`).
+- **🤏 การจีบนิ้ว (Pinch)** — แตะปลายนิ้วโป้งและนิ้วชี้เข้าด้วยกันเพื่อเริ่มวาดภาพ และปล่อยนิ้วออกจากกันเพื่อหยุดวาด ระบบจะตรวจสอบระยะห่างในพื้นที่ 3 มิติจริง (World Landmarks) ทำให้ไม่เกิดการสั่งงานผิดพลาดเมื่อเอียงมือ **และรองรับการทำงานพร้อมกันทั้งสองมือ**
+- **Radial dock (เมนูวงกลม)** — ปุ่มวงกลมตรงกลางด้านล่างสุดจะเปิดเมนูเครื่องมือสองวงซ้อนกัน: วงในจะเป็นสไตล์แปรง (Pen / Neon / Marker / Rainbow / Eraser) และวงนอกจะเป็นสีและขนาดเส้น สามารถทำท่าจีบที่เมนูดังกล่าวเพื่อย่อ/ขยาย หรือกดค้างแล้วลากเพื่อย้ายตำแหน่งของเมนูได้
+- **ควบคุมหน้าเว็บด้วยมือ (Hand-driven UI)** — เลื่อนปลายนิ้วไปอยู่เหนือปุ่มควบคุมใดๆ แล้วจีบนิ้วเพื่อคลิก ระบบจะมีเส้นแสดงโครงกระดูกมือวงแหวนแสดงสถานะการจีบ และคำอธิบายสถานะสด (HOVER / CLICK / DRAWING / MOVE) แสดงสิ่งที่ระบบตรวจจับมองเห็นในปัจจุบัน
+- **แถบเมนูการทำงาน (Actions panel)** (อยู่มุมบนขวา สามารถย้ายตำแหน่งและย่อขยายได้) — ใช้สำหรับย้อนกลับ (Undo: `Ctrl+Z`), ล้างหน้าจอ (Clear), ซ่อนกล้อง และ **บันทึกรูปภาพ (Save)** (บันทึกเป็นไฟล์ PNG ร่วมกับภาพจากกล้อง หรือจะบันทึกเฉพาะลายเส้นบนพื้นหลังสีดำก็ได้)
+- **⚙ ตั้งค่าการจีบนิ้ว (Pinch settings)** — ปรับค่าเกณฑ์ระยะการขยับนิ้วสำหรับการจับสถานะจีบตามความเหมาะสมของสภาพแสงและกล้องของคุณ (ข้อมูลจะบันทึกอยู่ใน `localStorage` ของเบราว์เซอร์)
 
-## Develop
+## การพัฒนาโปรเจกต์ (Develop)
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open the printed URL and allow camera access. `npm run typecheck` runs TypeScript checks; `npm run build` produces the production bundle in `dist/`.
+เปิดลิงก์ที่แสดงบนหน้าจอหลังจากรันคำสั่ง และอนุญาตให้เข้าถึงกล้องถ่ายรูป สามารถรันคำสั่ง `npm run typecheck` เพื่อตรวจสอบโค้ด TypeScript หรือใช้คำสั่ง `npm run build` เพื่อคอมไพล์โปรเจกต์สำหรับใช้งานจริงในโฟลเดอร์ `dist/`
 
-## Deploy to Vercel
+## การอัปโหลดไปยัง Vercel
 
-The app is a fully static Vite site — Vercel auto-detects it:
+แอปพลิเคชันนี้ทำงานแบบ Static เว็บไซต์ 100% บน Vite ซึ่งระบบของ Vercel จะตรวจจับการตั้งค่าได้โดยอัตโนมัติ:
 
 ```bash
 npm i -g vercel
 vercel
 ```
 
-Or push the repo to GitHub and import it at [vercel.com/new](https://vercel.com/new). Framework preset: **Vite** (build `npm run build`, output `dist`). No environment variables or serverless functions needed.
+หรือสามารถนำไปผูกเข้ากับ Repository บน GitHub แล้วเชื่อมต่อผ่านหน้า [vercel.com/new](https://vercel.com/new) โดยตั้งค่า Framework preset เป็น **Vite** (คำสั่งบิวด์: `npm run build`, โฟลเดอร์ผลลัพธ์: `dist`) โดยไม่จำเป็นต้องตั้งค่า Environment variables หรือ Serverless functions ใดๆ เพิ่มเติม
 
-> Note: camera access requires HTTPS, which Vercel provides by default.
+> หมายเหตุ: การเข้าใช้งานกล้องบนเบราว์เซอร์จำเป็นต้องผ่านโปรโตคอล HTTPS ซึ่งระบบของ Vercel จะมีให้อยู่แล้วเป็นค่าเริ่มต้น
 
-## Tech
+## เทคโนโลยีหลัก (Tech Stack)
 
 - React 18 + TypeScript + Vite
-- `@mediapipe/tasks-vision` HandLandmarker (VIDEO mode, GPU delegate, 2 hands, model + WASM loaded from Google/jsDelivr CDN)
-- Pinch detection = 2D hand-relative distance **AND** 3D world-landmark distance, with hysteresis + multi-frame debounce per hand
-- Two-layer `<canvas>` rendering: committed strokes + live strokes/skeleton/cursor overlay
-- Strokes stored as normalized points → resolution-independent undo/replay/resize
-- Fingertip-driven UI via `elementFromPoint` (hover, click, slider drag, panel drag) — no component changes needed
+- `@mediapipe/tasks-vision` HandLandmarker (ทำงานในโหมด VIDEO, ใช้ GPU, รองรับการจับ 2 มือพร้อมกัน, โหลดโมเดลและ WASM ผ่าน Google/jsDelivr CDN)
+- ระบบตรวจจับการจีบ (Pinch detection) คำนวณจากระยะห่างรูปแบบ 2D สัมพันธ์กับมือ และระยะห่างในพื้นที่ 3 มิติจริง ร่วมกับการทำงานของระบบป้องกันการหน่วงการสั่นไหว (Hysteresis) และการหน่วงเวลาป้องกันสุ่มตรวจจับ (Multi-frame Debounce) แยกทีละมือ
+- แสดงผลด้วยโครงสร้าง `<canvas>` สองชั้น: ชั้นเส้นวาดหลักที่บันทึกแล้ว และชั้นแสดงลายเส้นสด/โครงกระดูกนิ้วมือ/ตัวระบุตำแหน่งการคลิก
+- จัดเก็บลายเส้นวาดด้วยระบบจุดพิกัดปกติ (Normalized Points) เพื่อความเสถียร รองรับการเปลี่ยนขนาดจอภาพโดยไม่เสียรายละเอียด
+- การควบคุมส่วนติดต่อผู้ใช้ด้วยปลายนิ้วมือ ใช้ความสามารถของระบบ `elementFromPoint` (การโฮเวอร์, การคลิก, การเลื่อนแถบสไลเดอร์, การลากเมนู) โดยไม่ต้องเปลี่ยนโค้ดโครงสร้าง Component เดิม
