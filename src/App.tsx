@@ -69,6 +69,10 @@ export default function App() {
   const [pinchRatio, setPinchRatio] = useState(
     pinchConfigRef.current.ratioStart,
   );
+  const [drawingHand, setDrawingHand] = useState<"Left" | "Right">(() => {
+    const stored = localStorage.getItem("draw-on-hand.drawingHand");
+    return stored === "Left" || stored === "Right" ? stored : "Right";
+  });
 
   // Floating panels: the radial dock (anchored by its center point) and the
   // actions panel (top-left point; null = its default CSS position).
@@ -81,6 +85,11 @@ export default function App() {
     null,
   );
   const actionsRef = useRef<HTMLDivElement>(null);
+
+  const handleDrawingHandChange = useCallback((hand: "Left" | "Right") => {
+    setDrawingHand(hand);
+    localStorage.setItem("draw-on-hand.drawingHand", hand);
+  }, []);
 
   const handlePinchRatio = useCallback((value: number) => {
     const v = Math.min(MAX_PINCH_RATIO, Math.max(MIN_PINCH_RATIO, value));
@@ -398,9 +407,12 @@ export default function App() {
       }
 
       const t = toolRef.current;
-      const accent = t.style === "eraser" ? "#e2e8f0" : t.color;
 
       for (const f of frames) {
+        const isEraserHand = f.key === (drawingHand === "Right" ? "Left" : "Right");
+        const handStyle = isEraserHand ? "eraser" : t.style;
+        const handColor = isEraserHand ? "#e2e8f0" : t.color;
+
         const isUiHand = f === uiFrame;
         const handUiState: UiState = isUiHand
           ? uiState
@@ -411,8 +423,8 @@ export default function App() {
           let stroke = f.state.stroke;
           if (!stroke) {
             stroke = {
-              style: t.style,
-              color: t.color,
+              style: handStyle,
+              color: handColor,
               size: t.size,
               points: [],
             };
@@ -450,7 +462,7 @@ export default function App() {
           video.videoHeight,
           w,
           h,
-          accent,
+          handStyle === "eraser" ? "#e2e8f0" : handColor,
           f.hand.pinching,
         );
         drawCursor(
@@ -577,6 +589,8 @@ export default function App() {
         onClear={clearAll}
         onToggleCamera={() => setCameraVisible((v) => !v)}
         onSave={handleSave}
+        drawingHand={drawingHand}
+        onDrawingHandChange={handleDrawingHandChange}
       />
 
       {status === "ready" && !hasDrawn && (

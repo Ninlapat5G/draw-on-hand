@@ -32,6 +32,8 @@ interface ActionsPanelProps {
   onClear: () => void;
   onToggleCamera: () => void;
   onSave: (includeCamera: boolean) => void;
+  drawingHand: "Left" | "Right";
+  onDrawingHandChange: (hand: "Left" | "Right") => void;
 }
 
 /**
@@ -50,6 +52,8 @@ export function ActionsPanel({
   onClear,
   onToggleCamera,
   onSave,
+  drawingHand,
+  onDrawingHandChange,
 }: ActionsPanelProps) {
   const drag = usePointerDrag(onMove);
   const [collapsed, setCollapsed] = useState(false);
@@ -185,6 +189,26 @@ export function ActionsPanel({
             </div>
             <p className="settings-hint">
               How close your thumb &amp; index tips must get to click or draw.
+            </p>
+            <div className="settings-row" style={{ marginTop: "12px", borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: "12px", alignItems: "center" }}>
+              <span className="settings-label">Drawing Hand</span>
+              <div className="hand-selector">
+                <button
+                  className={`selector-btn ${drawingHand === "Right" ? "active" : ""}`}
+                  onClick={() => onDrawingHandChange("Right")}
+                >
+                  Right
+                </button>
+                <button
+                  className={`selector-btn ${drawingHand === "Left" ? "active" : ""}`}
+                  onClick={() => onDrawingHandChange("Left")}
+                >
+                  Left
+                </button>
+              </div>
+            </div>
+            <p className="settings-hint" style={{ marginBottom: "12px" }}>
+              The other hand acts as an eraser automatically.
             </p>
             <button
               className="settings-reset"
