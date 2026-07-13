@@ -23,7 +23,6 @@ import {
 import {
   createFaceLandmarker,
   getFaceTransform,
-  canvasToFaceRelative,
   faceRelativeToCanvas,
   getMaskBounds,
   type FaceTransform,
@@ -373,7 +372,7 @@ export default function App() {
         }
       };
 
-      const handlePointerUp = (upEvt: PointerEvent) => {
+      const handlePointerUp = () => {
         try {
           e.currentTarget.releasePointerCapture(e.pointerId);
         } catch (err) {}
@@ -479,7 +478,7 @@ export default function App() {
       }
     };
 
-    const handlePointerUp = (upEvt: PointerEvent) => {
+    const handlePointerUp = () => {
       try {
         e.currentTarget.releasePointerCapture(e.pointerId);
       } catch (err) {}
