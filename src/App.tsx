@@ -126,6 +126,7 @@ export default function App() {
 
   const defEditStateRef = useRef<{
     mode: "idle" | "move-box" | "move-anchor" | "resize-tl" | "resize-tr" | "resize-bl" | "resize-br";
+    activeHandKey: string | null;
     startX: number;
     startY: number;
     startBoxX: number;
@@ -136,6 +137,7 @@ export default function App() {
     startAnchorY: number;
   }>({
     mode: "idle",
+    activeHandKey: null,
     startX: 0,
     startY: 0,
     startBoxX: 0.5,
@@ -167,6 +169,7 @@ export default function App() {
 
   const maskEditStateRef = useRef<{
     mode: "idle" | "drag" | "scale";
+    activeHandKey: string | null;
     startHandX: number;
     startHandY: number;
     startOffsetX: number;
@@ -175,6 +178,7 @@ export default function App() {
     startDist: number;
   }>({
     mode: "idle",
+    activeHandKey: null,
     startHandX: 0,
     startHandY: 0,
     startOffsetX: 0,
@@ -1042,6 +1046,7 @@ export default function App() {
               if (mode !== "idle") {
                 defEditStateRef.current = {
                   mode,
+                  activeHandKey: f.key,
                   startX: f.pt.x,
                   startY: f.pt.y,
                   startBoxX: md.x,
@@ -1055,81 +1060,84 @@ export default function App() {
                 defIntercept = true;
               }
             }
-          } else if (f.hand.pinching) {
-            f.state.pinchFromUi = true;
-            defIntercept = true;
+          } else if (defEditStateRef.current.activeHandKey === f.key) {
+            if (f.hand.pinching) {
+              f.state.pinchFromUi = true;
+              defIntercept = true;
 
-            const dx = (f.pt.x - defEditStateRef.current.startX) / w;
-            const dy = (f.pt.y - defEditStateRef.current.startY) / h;
-            const edit = defEditStateRef.current;
+              const dx = (f.pt.x - defEditStateRef.current.startX) / w;
+              const dy = (f.pt.y - defEditStateRef.current.startY) / h;
+              const edit = defEditStateRef.current;
 
-            if (edit.mode === "move-anchor") {
-              const newAx = Math.min(1, Math.max(0, edit.startAnchorX + dx));
-              const newAy = Math.min(1, Math.max(0, edit.startAnchorY + dy));
-              setMaskDefinition((d) => ({ ...d, anchorX: newAx, anchorY: newAy }));
-            } else if (edit.mode === "move-box") {
-              const newCx = Math.min(1, Math.max(0, edit.startBoxX + dx));
-              const newCy = Math.min(1, Math.max(0, edit.startBoxY + dy));
-              const deltaX = newCx - edit.startBoxX;
-              const deltaY = newCy - edit.startBoxY;
-              setMaskDefinition((d) => ({
-                ...d,
-                x: newCx,
-                y: newCy,
-                anchorX: Math.min(1, Math.max(0, edit.startAnchorX + deltaX)),
-                anchorY: Math.min(1, Math.max(0, edit.startAnchorY + deltaY)),
-              }));
-            } else if (edit.mode === "resize-br") {
-              const right = Math.min(1, Math.max(edit.startBoxX - edit.startBoxW / 2 + 0.05, edit.startBoxX + edit.startBoxW / 2 + dx));
-              const bottom = Math.min(1, Math.max(edit.startBoxY - edit.startBoxH / 2 + 0.05, edit.startBoxY + edit.startBoxH / 2 + dy));
-              const left = edit.startBoxX - edit.startBoxW / 2;
-              const top = edit.startBoxY - edit.startBoxH / 2;
-              setMaskDefinition((d) => ({
-                ...d,
-                x: (left + right) / 2,
-                y: (top + bottom) / 2,
-                width: right - left,
-                height: bottom - top,
-              }));
-            } else if (edit.mode === "resize-tl") {
-              const left = Math.min(edit.startBoxX + edit.startBoxW / 2 - 0.05, Math.max(0, edit.startBoxX - edit.startBoxW / 2 + dx));
-              const top = Math.min(edit.startBoxY + edit.startBoxH / 2 - 0.05, Math.max(0, edit.startBoxY - edit.startBoxH / 2 + dy));
-              const right = edit.startBoxX + edit.startBoxW / 2;
-              const bottom = edit.startBoxY + edit.startBoxH / 2;
-              setMaskDefinition((d) => ({
-                ...d,
-                x: (left + right) / 2,
-                y: (top + bottom) / 2,
-                width: right - left,
-                height: bottom - top,
-              }));
-            } else if (edit.mode === "resize-tr") {
-              const right = Math.min(1, Math.max(edit.startBoxX - edit.startBoxW / 2 + 0.05, edit.startBoxX + edit.startBoxW / 2 + dx));
-              const top = Math.min(edit.startBoxY + edit.startBoxH / 2 - 0.05, Math.max(0, edit.startBoxY - edit.startBoxH / 2 + dy));
-              const left = edit.startBoxX - edit.startBoxW / 2;
-              const bottom = edit.startBoxY + edit.startBoxH / 2;
-              setMaskDefinition((d) => ({
-                ...d,
-                x: (left + right) / 2,
-                y: (top + bottom) / 2,
-                width: right - left,
-                height: bottom - top,
-              }));
-            } else if (edit.mode === "resize-bl") {
-              const left = Math.min(edit.startBoxX + edit.startBoxW / 2 - 0.05, Math.max(0, edit.startBoxX - edit.startBoxW / 2 + dx));
-              const bottom = Math.min(1, Math.max(edit.startBoxY - edit.startBoxH / 2 + 0.05, edit.startBoxY + edit.startBoxH / 2 + dy));
-              const right = edit.startBoxX + edit.startBoxW / 2;
-              const top = edit.startBoxY - edit.startBoxH / 2;
-              setMaskDefinition((d) => ({
-                ...d,
-                x: (left + right) / 2,
-                y: (top + bottom) / 2,
-                width: right - left,
-                height: bottom - top,
-              }));
+              if (edit.mode === "move-anchor") {
+                const newAx = Math.min(1, Math.max(0, edit.startAnchorX + dx));
+                const newAy = Math.min(1, Math.max(0, edit.startAnchorY + dy));
+                setMaskDefinition((d) => ({ ...d, anchorX: newAx, anchorY: newAy }));
+              } else if (edit.mode === "move-box") {
+                const newCx = Math.min(1, Math.max(0, edit.startBoxX + dx));
+                const newCy = Math.min(1, Math.max(0, edit.startBoxY + dy));
+                const deltaX = newCx - edit.startBoxX;
+                const deltaY = newCy - edit.startBoxY;
+                setMaskDefinition((d) => ({
+                  ...d,
+                  x: newCx,
+                  y: newCy,
+                  anchorX: Math.min(1, Math.max(0, edit.startAnchorX + deltaX)),
+                  anchorY: Math.min(1, Math.max(0, edit.startAnchorY + deltaY)),
+                }));
+              } else if (edit.mode === "resize-br") {
+                const right = Math.min(1, Math.max(edit.startBoxX - edit.startBoxW / 2 + 0.05, edit.startBoxX + edit.startBoxW / 2 + dx));
+                const bottom = Math.min(1, Math.max(edit.startBoxY - edit.startBoxH / 2 + 0.05, edit.startBoxY + edit.startBoxH / 2 + dy));
+                const left = edit.startBoxX - edit.startBoxW / 2;
+                const top = edit.startBoxY - edit.startBoxH / 2;
+                setMaskDefinition((d) => ({
+                  ...d,
+                  x: (left + right) / 2,
+                  y: (top + bottom) / 2,
+                  width: right - left,
+                  height: bottom - top,
+                }));
+              } else if (edit.mode === "resize-tl") {
+                const left = Math.min(edit.startBoxX + edit.startBoxW / 2 - 0.05, Math.max(0, edit.startBoxX - edit.startBoxW / 2 + dx));
+                const top = Math.min(edit.startBoxY + edit.startBoxH / 2 - 0.05, Math.max(0, edit.startBoxY - edit.startBoxH / 2 + dy));
+                const right = edit.startBoxX + edit.startBoxW / 2;
+                const bottom = edit.startBoxY + edit.startBoxH / 2;
+                setMaskDefinition((d) => ({
+                  ...d,
+                  x: (left + right) / 2,
+                  y: (top + bottom) / 2,
+                  width: right - left,
+                  height: bottom - top,
+                }));
+              } else if (edit.mode === "resize-tr") {
+                const right = Math.min(1, Math.max(edit.startBoxX - edit.startBoxW / 2 + 0.05, edit.startBoxX + edit.startBoxW / 2 + dx));
+                const top = Math.min(edit.startBoxY + edit.startBoxH / 2 - 0.05, Math.max(0, edit.startBoxY - edit.startBoxH / 2 + dy));
+                const left = edit.startBoxX - edit.startBoxW / 2;
+                const bottom = edit.startBoxY + edit.startBoxH / 2;
+                setMaskDefinition((d) => ({
+                  ...d,
+                  x: (left + right) / 2,
+                  y: (top + bottom) / 2,
+                  width: right - left,
+                  height: bottom - top,
+                }));
+              } else if (edit.mode === "resize-bl") {
+                const left = Math.min(edit.startBoxX + edit.startBoxW / 2 - 0.05, Math.max(0, edit.startBoxX - edit.startBoxW / 2 + dx));
+                const bottom = Math.min(1, Math.max(edit.startBoxY - edit.startBoxH / 2 + 0.05, edit.startBoxY + edit.startBoxH / 2 + dy));
+                const right = edit.startBoxX + edit.startBoxW / 2;
+                const top = edit.startBoxY - edit.startBoxH / 2;
+                setMaskDefinition((d) => ({
+                  ...d,
+                  x: (left + right) / 2,
+                  y: (top + bottom) / 2,
+                  width: right - left,
+                  height: bottom - top,
+                }));
+              }
+            } else {
+              defEditStateRef.current.mode = "idle";
+              defEditStateRef.current.activeHandKey = null;
             }
-          } else {
-            defEditStateRef.current.mode = "idle";
           }
         }
 
@@ -1169,6 +1177,7 @@ export default function App() {
                   if (distToCenter < 40) {
                     maskEditStateRef.current = {
                       mode: "drag",
+                      activeHandKey: f.key,
                       startHandX: f.pt.x,
                       startHandY: f.pt.y,
                       startOffsetX: selectedMask.offsetX,
@@ -1181,6 +1190,7 @@ export default function App() {
                   } else if (distToScale < 40) {
                     maskEditStateRef.current = {
                       mode: "scale",
+                      activeHandKey: f.key,
                       startHandX: f.pt.x,
                       startHandY: f.pt.y,
                       startOffsetX: selectedMask.offsetX,
@@ -1192,39 +1202,42 @@ export default function App() {
                     maskIntercept = true;
                   }
                 }
-              } else if (f.hand.pinching) {
-                f.state.pinchFromUi = true;
-                maskIntercept = true;
+              } else if (maskEditStateRef.current.activeHandKey === f.key) {
+                if (f.hand.pinching) {
+                  f.state.pinchFromUi = true;
+                  maskIntercept = true;
 
-                if (maskEditStateRef.current.mode === "drag") {
-                  const dx = f.pt.x - maskEditStateRef.current.startHandX;
-                  const dy = f.pt.y - maskEditStateRef.current.startHandY;
+                  if (maskEditStateRef.current.mode === "drag") {
+                    const dx = f.pt.x - maskEditStateRef.current.startHandX;
+                    const dy = f.pt.y - maskEditStateRef.current.startHandY;
 
-                  const dnx = dx / w;
-                  const dny = dy / h;
-                  const dfx = dnx / faceTransform.scale;
-                  const dfy = dny / faceTransform.scale;
+                    const dnx = dx / w;
+                    const dny = dy / h;
+                    const dfx = dnx / faceTransform.scale;
+                    const dfy = dny / faceTransform.scale;
 
-                  const cos = Math.cos(-faceTransform.angle);
-                  const sin = Math.sin(-faceTransform.angle);
-                  const rdfx = dfx * cos - dfy * sin;
-                  const rdfy = dfx * sin + dfy * cos;
+                    const cos = Math.cos(-faceTransform.angle);
+                    const sin = Math.sin(-faceTransform.angle);
+                    const rdfx = dfx * cos - dfy * sin;
+                    const rdfy = dfx * sin + dfy * cos;
 
-                  handleUpdateMask(selectedMask.id, {
-                    offsetX: maskEditStateRef.current.startOffsetX + rdfx,
-                    offsetY: maskEditStateRef.current.startOffsetY + rdfy,
-                  });
-                } else if (maskEditStateRef.current.mode === "scale") {
-                  const curDist = Math.hypot(f.pt.x - cx, f.pt.y - cy);
-                  const startDist = maskEditStateRef.current.startDist;
-                  if (startDist > 10) {
-                    const ratio = curDist / startDist;
-                    const newScale = Math.min(2.5, Math.max(0.3, maskEditStateRef.current.startScale * ratio));
-                    handleUpdateMask(selectedMask.id, { scale: newScale });
+                    handleUpdateMask(selectedMask.id, {
+                      offsetX: maskEditStateRef.current.startOffsetX + rdfx,
+                      offsetY: maskEditStateRef.current.startOffsetY + rdfy,
+                    });
+                  } else if (maskEditStateRef.current.mode === "scale") {
+                    const curDist = Math.hypot(f.pt.x - cx, f.pt.y - cy);
+                    const startDist = maskEditStateRef.current.startDist;
+                    if (startDist > 10) {
+                      const ratio = curDist / startDist;
+                      const newScale = Math.min(2.5, Math.max(0.3, maskEditStateRef.current.startScale * ratio));
+                      handleUpdateMask(selectedMask.id, { scale: newScale });
+                    }
                   }
+                } else {
+                  maskEditStateRef.current.mode = "idle";
+                  maskEditStateRef.current.activeHandKey = null;
                 }
-              } else {
-                maskEditStateRef.current.mode = "idle";
               }
             }
           }
