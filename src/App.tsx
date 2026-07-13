@@ -383,13 +383,29 @@ export default function App() {
       let faceTransform: FaceTransform | null = null;
       if (faceResult && faceResult.faceLandmarks && faceResult.faceLandmarks.length > 0) {
         const landmarks = faceResult.faceLandmarks[0];
-        faceTransform = getFaceTransform(landmarks);
+        faceTransform = getFaceTransform(
+          landmarks,
+          video.videoWidth,
+          video.videoHeight,
+          w,
+          h,
+        );
         lastFaceTransformRef.current = faceTransform;
       } else {
         lastFaceTransformRef.current = null;
       }
 
       if (faceTransform) {
+        // Draw Face nose tip indicator dot (glowing cyan)
+        lctx.save();
+        lctx.beginPath();
+        lctx.arc(faceTransform.x * w, faceTransform.y * h, 5, 0, Math.PI * 2);
+        lctx.fillStyle = "rgba(34, 211, 238, 0.9)";
+        lctx.shadowColor = "rgba(34, 211, 238, 0.8)";
+        lctx.shadowBlur = 10;
+        lctx.fill();
+        lctx.restore();
+
         for (const mask of masksRef.current) {
           if (!mask.visible) continue;
           lctx.save();

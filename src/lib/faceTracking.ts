@@ -4,6 +4,7 @@ import {
   type NormalizedLandmark,
 } from "@mediapipe/tasks-vision";
 import { type FaceRelativePoint } from "../types";
+import { videoPointToCanvas } from "./tracking";
 
 const WASM_BASE =
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
@@ -39,14 +40,30 @@ export interface FaceTransform {
  * Index 33 is left eye outer corner.
  * Index 263 is right eye outer corner.
  */
-export function getFaceTransform(lm: NormalizedLandmark[]): FaceTransform | null {
+export function getFaceTransform(
+  lm: NormalizedLandmark[],
+  videoW: number,
+  videoH: number,
+  canvasW: number,
+  canvasH: number,
+): FaceTransform | null {
   if (!lm || lm.length < 264) return null;
 
-  const nose = lm[4];
-  const leftEye = lm[33];
-  const rightEye = lm[263];
+  const rawNose = lm[4];
+  const rawLeftEye = lm[33];
+  const rawRightEye = lm[263];
 
-  if (!nose || !leftEye || !rightEye) return null;
+  if (!rawNose || !rawLeftEye || !rawRightEye) return null;
+
+  // Map raw landmarks from video coordinates to cover-fit canvas space
+  const nosePt = videoPointToCanvas(rawNose.x, rawNose.y, videoW, videoH, canvasW, canvasH);
+  const leftPt = videoPointToCanvas(rawLeftEye.x, rawLeftEye.y, videoW, videoH, canvasW, canvasH);
+  const rightPt = videoPointToCanvas(rawRightEye.x, rawRightEye.y, videoW, videoH, canvasW, canvasH);
+
+  // Normalize mapped coordinates back relative to canvas width and height
+  const nose = { x: nosePt.x / canvasW, y: nosePt.y / canvasH };
+  const leftEye = { x: leftPt.x / canvasW, y: leftPt.y / canvasH };
+  const rightEye = { x: rightPt.x / canvasW, y: rightPt.y / canvasH };
 
   // Calculate eye-to-eye distance for scale
   const scale = Math.hypot(rightEye.x - leftEye.x, rightEye.y - leftEye.y);
