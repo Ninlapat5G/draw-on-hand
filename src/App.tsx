@@ -34,6 +34,16 @@ import type { AppStatus, Stroke, Tool, MaskLayer, MaskStroke } from "./types";
 const DEFAULT_TOOL: Tool = { style: "pen", color: "#22d3ee", size: 10 };
 const PINCH_STORAGE_KEY = "draw-on-hand.pinchRatio";
 
+/** Which handle of the mask-definition box an interaction targets. */
+type DefEditMode =
+  | "idle"
+  | "move-box"
+  | "move-anchor"
+  | "resize-tl"
+  | "resize-tr"
+  | "resize-bl"
+  | "resize-br";
+
 /** Per-hand tracking state so both hands can draw independently. */
 interface HandState {
   gesture: GestureEngine;
@@ -43,6 +53,10 @@ interface HandState {
   pinchFromUi: boolean;
   /** pinch began on the canvas — never turn into a UI click */
   pinchFromCanvas: boolean;
+  /** definition handle this fingertip was hovering last frame; captured so a
+   * pinch grabs the intended target even though closing the pinch shifts the
+   * fingertip position off it. */
+  hoverHandle: DefEditMode;
 }
 
 function loadPinchRatio(): number {
@@ -125,7 +139,7 @@ export default function App() {
   }, [maskDefinition]);
 
   const defEditStateRef = useRef<{
-    mode: "idle" | "move-box" | "move-anchor" | "resize-tl" | "resize-tr" | "resize-bl" | "resize-br";
+    mode: DefEditMode;
     activeHandKey: string | null;
     startX: number;
     startY: number;
@@ -147,6 +161,11 @@ export default function App() {
     startAnchorX: 0.5,
     startAnchorY: 0.5,
   });
+
+  /** Which definition handle the fingertip is currently near (updated each
+   * frame from hand positions, read one frame later by the overlay draw) so
+   * the target lights up before the user pinches. */
+  const defHoverRef = useRef<string | null>(null);
 
   const maskWidgetRef = useRef<HTMLDivElement>(null);
   const lastFaceTransformRef = useRef<FaceTransform | null>(null);
@@ -269,6 +288,7 @@ export default function App() {
 
       defEditStateRef.current = {
         mode,
+        activeHandKey: null,
         startX: clickX,
         startY: clickY,
         startBoxX: maskDefinition.x,
@@ -850,30 +870,45 @@ export default function App() {
         lctx.rect(x1, y1, x2 - x1, y2 - y1);
         lctx.stroke();
 
-        // Draw corner handles (orange circles)
-        lctx.fillStyle = "#fb923c";
+        const hoveredHandle = defHoverRef.current;
+
+        // Draw corner handles (orange circles); the one the fingertip is
+        // aiming at grows and brightens so the user knows it's grabbable.
         lctx.strokeStyle = "#ffffff";
         lctx.lineWidth = 1.5;
         lctx.setLineDash([]);
-        const drawHandle = (hx: number, hy: number) => {
+        const drawHandle = (hx: number, hy: number, id: string) => {
+          const on = hoveredHandle === id;
           lctx.beginPath();
-          lctx.arc(hx, hy, 8, 0, Math.PI * 2);
+          lctx.arc(hx, hy, on ? 13 : 8, 0, Math.PI * 2);
+          lctx.fillStyle = on ? "#fdba74" : "#fb923c";
+          if (on) {
+            lctx.shadowColor = "#fb923c";
+            lctx.shadowBlur = 16;
+          }
           lctx.fill();
           lctx.stroke();
+          lctx.shadowBlur = 0;
         };
-        drawHandle(x1, y1);
-        drawHandle(x2, y1);
-        drawHandle(x1, y2);
-        drawHandle(x2, y2);
+        drawHandle(x1, y1, "resize-tl");
+        drawHandle(x2, y1, "resize-tr");
+        drawHandle(x1, y2, "resize-bl");
+        drawHandle(x2, y2, "resize-br");
 
         // Draw center move handle
+        const boxOn = hoveredHandle === "move-box";
         lctx.beginPath();
-        lctx.arc(cx, cy, 12, 0, Math.PI * 2);
-        lctx.fillStyle = "rgba(251, 146, 60, 0.25)";
+        lctx.arc(cx, cy, boxOn ? 16 : 12, 0, Math.PI * 2);
+        lctx.fillStyle = boxOn ? "rgba(251, 146, 60, 0.5)" : "rgba(251, 146, 60, 0.25)";
         lctx.strokeStyle = "#fb923c";
         lctx.lineWidth = 2;
+        if (boxOn) {
+          lctx.shadowColor = "#fb923c";
+          lctx.shadowBlur = 16;
+        }
         lctx.fill();
         lctx.stroke();
+        lctx.shadowBlur = 0;
 
         // Target dot inside center handle
         lctx.beginPath();
@@ -881,14 +916,20 @@ export default function App() {
         lctx.fillStyle = "#ffffff";
         lctx.fill();
 
-        // Draw custom anchor point handle (glowing yellow star or crosshair target)
+        // Draw custom anchor point handle (glowing yellow crosshair target)
+        const anchorOn = hoveredHandle === "move-anchor";
         lctx.beginPath();
-        lctx.arc(ax, ay, 12, 0, Math.PI * 2);
-        lctx.fillStyle = "rgba(250, 204, 21, 0.4)";
+        lctx.arc(ax, ay, anchorOn ? 16 : 12, 0, Math.PI * 2);
+        lctx.fillStyle = anchorOn ? "rgba(250, 204, 21, 0.65)" : "rgba(250, 204, 21, 0.4)";
         lctx.strokeStyle = "#facc15";
         lctx.lineWidth = 2.2;
+        if (anchorOn) {
+          lctx.shadowColor = "#facc15";
+          lctx.shadowBlur = 18;
+        }
         lctx.fill();
         lctx.stroke();
+        lctx.shadowBlur = 0;
 
         // Anchor center target dot
         lctx.beginPath();
@@ -956,6 +997,7 @@ export default function App() {
             prevPinch: false,
             pinchFromUi: false,
             pinchFromCanvas: false,
+            hoverHandle: "idle",
           };
           handsRef.current.set(key, state);
         }
@@ -970,7 +1012,14 @@ export default function App() {
         );
         const overUi = isOverUi(pt.x, pt.y);
 
-        if (hand.pinching && !state.prevPinch) {
+        // Rising edge of the pinch. Captured here BEFORE prevPinch is
+        // overwritten below, so the mask-box / mask-manipulation
+        // interceptors further down can still detect "just pinched" — they
+        // run after this map, where f.state.prevPinch already equals the
+        // current frame's value and can no longer reveal the transition.
+        const justPinched = hand.pinching && !state.prevPinch;
+
+        if (justPinched) {
           state.pinchFromUi = overUi;
           state.pinchFromCanvas = !overUi;
         } else if (!hand.pinching) {
@@ -979,7 +1028,7 @@ export default function App() {
         }
         state.prevPinch = hand.pinching;
 
-        return { key, lm, state, hand, pt, overUi };
+        return { key, lm, state, hand, pt, overUi, justPinched };
       });
 
       let uiFrame =
@@ -1008,6 +1057,26 @@ export default function App() {
 
       const t = toolRef.current;
 
+      // Guard against a stuck edit session: if a finger grabbed a handle and
+      // then the owning hand left the frame (or MediaPipe relabelled it), its
+      // key vanishes from `frames`. Reset so the next pinch can grab again.
+      // Mouse-driven edits use activeHandKey === null and are left untouched.
+      const detectedKeys = new Set(frames.map((fr) => fr.key));
+      const defOwner = defEditStateRef.current.activeHandKey;
+      if (defOwner !== null && !detectedKeys.has(defOwner)) {
+        defEditStateRef.current.mode = "idle";
+        defEditStateRef.current.activeHandKey = null;
+      }
+      const maskOwner = maskEditStateRef.current.activeHandKey;
+      if (maskOwner !== null && !detectedKeys.has(maskOwner)) {
+        maskEditStateRef.current.mode = "idle";
+        maskEditStateRef.current.activeHandKey = null;
+      }
+
+      // Which definition handle a fingertip is aiming at this frame (drives
+      // the hover highlight next frame). Reset each frame; set during the loop.
+      let nextDefHover: string | null = null;
+
       for (const f of frames) {
         const isEraserHand = f.key === (drawingHandRef.current === "Right" ? "Left" : "Right");
         const handStyle = isEraserHand ? "eraser" : t.style;
@@ -1032,38 +1101,57 @@ export default function App() {
           const cy = md.y * h;
 
           const dist = (px: number, py: number) => Math.hypot(f.pt.x - px, f.pt.y - py);
+          // Nearest handle within `r` px, or "idle". Anchor first (it sits on
+          // top of the box centre) so it wins ties.
+          const pickHandle = (r: number): DefEditMode => {
+            if (dist(ax, ay) < r) return "move-anchor";
+            if (dist(cx, cy) < r) return "move-box";
+            if (dist(x1, y1) < r) return "resize-tl";
+            if (dist(x2, y1) < r) return "resize-tr";
+            if (dist(x1, y2) < r) return "resize-bl";
+            if (dist(x2, y2) < r) return "resize-br";
+            return "idle";
+          };
 
           if (defEditStateRef.current.mode === "idle") {
-            if (f.hand.pinching && !f.state.prevPinch) {
-              let mode: typeof defEditStateRef.current.mode = "idle";
-              if (dist(ax, ay) < 35) mode = "move-anchor";
-              else if (dist(cx, cy) < 35) mode = "move-box";
-              else if (dist(x1, y1) < 35) mode = "resize-tl";
-              else if (dist(x2, y1) < 35) mode = "resize-tr";
-              else if (dist(x1, y2) < 35) mode = "resize-bl";
-              else if (dist(x2, y2) < 35) mode = "resize-br";
+            // What the fingertip is aiming at right now (generous radius).
+            const near = f.overUi ? "idle" : pickHandle(70);
+            if (near !== "idle") nextDefHover = near;
 
-              if (mode !== "idle") {
-                defEditStateRef.current = {
-                  mode,
-                  activeHandKey: f.key,
-                  startX: f.pt.x,
-                  startY: f.pt.y,
-                  startBoxX: md.x,
-                  startBoxY: md.y,
-                  startBoxW: md.width,
-                  startBoxH: md.height,
-                  startAnchorX: md.anchorX,
-                  startAnchorY: md.anchorY,
-                };
-                f.state.pinchFromUi = true;
-                defIntercept = true;
-              }
+            // Grab the handle the finger was aiming at just BEFORE the pinch.
+            // Closing thumb-to-index shifts the tracked midpoint, so the live
+            // position usually drifts off the target on the pinch frame — the
+            // remembered hover is what the user intended. `!stroke` stops a
+            // pinch that is already drawing on the canvas from hijacking a
+            // handle it happens to pass over. Not tied to the single
+            // rising-edge frame, so a late-detected pinch still grabs.
+            const aim = f.state.hoverHandle;
+            if (f.hand.pinching && !f.state.stroke && aim !== "idle") {
+              defEditStateRef.current = {
+                mode: aim,
+                activeHandKey: f.key,
+                startX: f.pt.x,
+                startY: f.pt.y,
+                startBoxX: md.x,
+                startBoxY: md.y,
+                startBoxW: md.width,
+                startBoxH: md.height,
+                startAnchorX: md.anchorX,
+                startAnchorY: md.anchorY,
+              };
+              f.state.pinchFromUi = true;
+              defIntercept = true;
+              nextDefHover = aim;
             }
+
+            // Remember this frame's aim for the next one (only while open —
+            // once pinching we must keep the pre-pinch target).
+            if (!f.hand.pinching) f.state.hoverHandle = near;
           } else if (defEditStateRef.current.activeHandKey === f.key) {
             if (f.hand.pinching) {
               f.state.pinchFromUi = true;
               defIntercept = true;
+              nextDefHover = defEditStateRef.current.mode;
 
               const dx = (f.pt.x - defEditStateRef.current.startX) / w;
               const dy = (f.pt.y - defEditStateRef.current.startY) / h;
@@ -1173,8 +1261,8 @@ export default function App() {
               const distToScale = Math.hypot(f.pt.x - sx, f.pt.y - sy);
 
               if (maskEditStateRef.current.mode === "idle") {
-                if (f.hand.pinching && !f.state.prevPinch) {
-                  if (distToCenter < 40) {
+                if (f.justPinched) {
+                  if (distToCenter < 52) {
                     maskEditStateRef.current = {
                       mode: "drag",
                       activeHandKey: f.key,
@@ -1187,7 +1275,7 @@ export default function App() {
                     };
                     f.state.pinchFromUi = true;
                     maskIntercept = true;
-                  } else if (distToScale < 40) {
+                  } else if (distToScale < 52) {
                     maskEditStateRef.current = {
                       mode: "scale",
                       activeHandKey: f.key,
@@ -1300,6 +1388,9 @@ export default function App() {
           f.hand.pinchStrength,
         );
       }
+
+      // Publish this frame's handle hover for the next overlay draw.
+      defHoverRef.current = maskDefinitionRef.current.active ? nextDefHover : null;
     };
 
     const init = async () => {
