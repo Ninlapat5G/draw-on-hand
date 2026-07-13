@@ -3,7 +3,7 @@ import {
   FaceLandmarker,
   type NormalizedLandmark,
 } from "@mediapipe/tasks-vision";
-import { type FaceRelativePoint } from "../types";
+import { type FaceRelativePoint, type MaskStroke } from "../types";
 import { videoPointToCanvas } from "./tracking";
 
 const WASM_BASE =
@@ -52,21 +52,31 @@ export function getFaceTransform(
   const rawNose = lm[4];
   const rawLeftEye = lm[33];
   const rawRightEye = lm[263];
+  const rawForehead = lm[10];
+  const rawChin = lm[152];
 
-  if (!rawNose || !rawLeftEye || !rawRightEye) return null;
+  if (!rawNose || !rawLeftEye || !rawRightEye || !rawForehead || !rawChin) return null;
 
   // Map raw landmarks from video coordinates to cover-fit canvas space
   const nosePt = videoPointToCanvas(rawNose.x, rawNose.y, videoW, videoH, canvasW, canvasH);
   const leftPt = videoPointToCanvas(rawLeftEye.x, rawLeftEye.y, videoW, videoH, canvasW, canvasH);
   const rightPt = videoPointToCanvas(rawRightEye.x, rawRightEye.y, videoW, videoH, canvasW, canvasH);
+  const foreheadPt = videoPointToCanvas(rawForehead.x, rawForehead.y, videoW, videoH, canvasW, canvasH);
+  const chinPt = videoPointToCanvas(rawChin.x, rawChin.y, videoW, videoH, canvasW, canvasH);
 
   // Normalize mapped coordinates back relative to canvas width and height
   const nose = { x: nosePt.x / canvasW, y: nosePt.y / canvasH };
   const leftEye = { x: leftPt.x / canvasW, y: leftPt.y / canvasH };
   const rightEye = { x: rightPt.x / canvasW, y: rightPt.y / canvasH };
+  const forehead = { x: foreheadPt.x / canvasW, y: foreheadPt.y / canvasH };
+  const chin = { x: chinPt.x / canvasW, y: chinPt.y / canvasH };
 
-  // Calculate eye-to-eye distance for scale
-  const scale = Math.hypot(rightEye.x - leftEye.x, rightEye.y - leftEye.y);
+  // Calculate width scale (eye-to-eye) and height scale (forehead-to-chin)
+  const widthScale = Math.hypot(rightEye.x - leftEye.x, rightEye.y - leftEye.y);
+  const heightScale = Math.hypot(chin.x - forehead.x, chin.y - forehead.y);
+
+  // Average width and height scales for a stable full-face scale multiplier
+  const scale = (widthScale + heightScale) / 2;
 
   // Calculate roll angle (Z-axis rotation)
   const angle = Math.atan2(rightEye.y - leftEye.y, rightEye.x - leftEye.x);
@@ -133,9 +143,10 @@ export function faceRelativeToCanvas(
   customScale = 1.0,
   offsetX = 0.0,
   offsetY = 0.0,
+  mirror = false,
 ): { x: number; y: number } {
   // Apply custom scale and offset in face-relative space
-  const fx = pt.fx * customScale + offsetX;
+  const fx = (pt.fx * (mirror ? -1 : 1)) * customScale + offsetX;
   const fy = pt.fy * customScale + offsetY;
 
   // Scale back up to canvas
@@ -152,5 +163,44 @@ export function faceRelativeToCanvas(
   return {
     x: rx + face.x,
     y: ry + face.y,
+  };
+}
+
+export interface MaskBounds {
+  minFx: number;
+  maxFx: number;
+  minFy: number;
+  maxFy: number;
+  centerX: number;
+  centerY: number;
+}
+
+export function getMaskBounds(strokes: MaskStroke[]): MaskBounds | null {
+  if (!strokes || strokes.length === 0) return null;
+  let minFx = Infinity;
+  let maxFx = -Infinity;
+  let minFy = Infinity;
+  let maxFy = -Infinity;
+
+  let hasPoints = false;
+  for (const s of strokes) {
+    for (const p of s.points) {
+      hasPoints = true;
+      if (p.fx < minFx) minFx = p.fx;
+      if (p.fx > maxFx) maxFx = p.fx;
+      if (p.fy < minFy) minFy = p.fy;
+      if (p.fy > maxFy) maxFy = p.fy;
+    }
+  }
+
+  if (!hasPoints) return null;
+
+  return {
+    minFx,
+    maxFx,
+    minFy,
+    maxFy,
+    centerX: (minFx + maxFx) / 2,
+    centerY: (minFy + maxFy) / 2,
   };
 }

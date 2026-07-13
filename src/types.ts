@@ -48,5 +48,7 @@ export interface MaskLayer {
   offsetY: number;
   opacity: number;
   visible: boolean;
+  mirror?: boolean;
+  colorOverride?: string;
 }
 

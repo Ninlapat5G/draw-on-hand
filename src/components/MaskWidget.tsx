@@ -189,6 +189,58 @@ export function MaskWidget({
               }
             />
 
+            {/* Mirror Mask Toggle */}
+            <div className="settings-row mirror-row">
+              <span className="settings-label">Mirror mask</span>
+              <input
+                type="checkbox"
+                className="settings-checkbox"
+                checked={selectedMask.mirror || false}
+                onChange={(e) =>
+                  onUpdateMask(selectedMask.id, { mirror: e.target.checked })
+                }
+              />
+            </div>
+
+            {/* Color override picker */}
+            <div className="settings-row color-override-row" style={{ marginTop: "12px" }}>
+              <span className="settings-label">Color Filter</span>
+              <div className="color-swatches" style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginTop: "4px" }}>
+                <button
+                  className={`color-swatch original ${!selectedMask.colorOverride ? "active" : ""}`}
+                  onClick={() => onUpdateMask(selectedMask.id, { colorOverride: undefined })}
+                  title="Original Color"
+                  style={{
+                    width: "20px",
+                    height: "20px",
+                    borderRadius: "50%",
+                    border: "2px solid rgba(255,255,255,0.2)",
+                    cursor: "pointer",
+                    background: "linear-gradient(45deg, #f43f5e, #22d3ee, #10b981)",
+                    boxShadow: !selectedMask.colorOverride ? "0 0 8px #22d3ee" : "none",
+                  }}
+                />
+                {["#22d3ee", "#f43f5e", "#10b981", "#fbbf24", "#a855f7", "#ffffff"].map((color) => (
+                  <button
+                    key={color}
+                    className={`color-swatch ${selectedMask.colorOverride === color ? "active" : ""}`}
+                    onClick={() => onUpdateMask(selectedMask.id, { colorOverride: color })}
+                    style={{
+                      width: "20px",
+                      height: "20px",
+                      borderRadius: "50%",
+                      border: selectedMask.colorOverride === color ? "2px solid #ffffff" : "2px solid rgba(255,255,255,0.2)",
+                      backgroundColor: color,
+                      cursor: "pointer",
+                      boxShadow: selectedMask.colorOverride === color ? `0 0 8px ${color}` : "none",
+                      transition: "transform 0.15s ease",
+                    }}
+                    title={color}
+                  />
+                ))}
+              </div>
+            </div>
+
             <button
               className="settings-reset"
               onClick={() =>
@@ -197,6 +249,8 @@ export function MaskWidget({
                   offsetX: 0.0,
                   offsetY: 0.0,
                   opacity: 1.0,
+                  mirror: false,
+                  colorOverride: undefined,
                 })
               }
             >

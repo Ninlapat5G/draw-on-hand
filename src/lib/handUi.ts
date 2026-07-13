@@ -12,7 +12,7 @@ export interface UiState {
 
 const INTERACTIVE_SELECTOR = "button, input, label";
 const UI_CONTAINER_SELECTOR =
-  ".dock, .topbar, .actions-panel, .save-menu, .overlay-card";
+  ".dock, .topbar, .actions-panel, .save-menu, .overlay-card, .mask-widget";
 
 /** How far (px) the pointer may drift off a control before hover drops. */
 const STICKY_MARGIN = 16;
@@ -183,15 +183,25 @@ export class HandUiController {
     const t = Math.min(1, Math.max(0, (x - rect.left) / rect.width));
     const min = Number(input.min || 0);
     const max = Number(input.max || 100);
-    const value = Math.round(min + t * (max - min));
-    if (Number(input.value) === value) return;
+    const step = Number(input.step || 1);
+
+    let value = min + t * (max - min);
+    const steps = Math.round((value - min) / step);
+    value = min + steps * step;
+    value = Math.min(max, Math.max(min, value));
+
+    const precision = step.toString().split(".")[1]?.length ?? 0;
+    const valueStr = value.toFixed(precision);
+
+    if (input.value === valueStr) return;
+
     // Set through the native setter + input event so React's controlled
     // component sees the change.
     const setter = Object.getOwnPropertyDescriptor(
       HTMLInputElement.prototype,
       "value",
     )?.set;
-    setter?.call(input, String(value));
+    setter?.call(input, valueStr);
     input.dispatchEvent(new Event("input", { bubbles: true }));
   }
 }

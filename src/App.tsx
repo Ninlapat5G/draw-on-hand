@@ -25,6 +25,7 @@ import {
   getFaceTransform,
   canvasToFaceRelative,
   faceRelativeToCanvas,
+  getMaskBounds,
   type FaceTransform,
 } from "./lib/faceTracking";
 import { drawStroke, eraseSegment } from "./lib/strokes";
@@ -114,6 +115,47 @@ export default function App() {
     masksRef.current = masks;
   }, [masks]);
 
+  const selectedMaskIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    selectedMaskIdRef.current = selectedMaskId;
+  }, [selectedMaskId]);
+
+  const maskEditStateRef = useRef<{
+    mode: "idle" | "drag" | "scale";
+    startHandX: number;
+    startHandY: number;
+    startOffsetX: number;
+    startOffsetY: number;
+    startScale: number;
+    startDist: number;
+  }>({
+    mode: "idle",
+    startHandX: 0,
+    startHandY: 0,
+    startOffsetX: 0,
+    startOffsetY: 0,
+    startScale: 1,
+    startDist: 0,
+  });
+
+  const mouseEditStateRef = useRef<{
+    mode: "idle" | "drag" | "scale";
+    startHandX: number;
+    startHandY: number;
+    startOffsetX: number;
+    startOffsetY: number;
+    startScale: number;
+    startDist: number;
+  }>({
+    mode: "idle",
+    startHandX: 0,
+    startHandY: 0,
+    startOffsetX: 0,
+    startOffsetY: 0,
+    startScale: 1,
+    startDist: 0,
+  });
+
   const handleSelectMask = useCallback((id: string | null) => {
     setSelectedMaskId(id);
   }, []);
@@ -133,6 +175,116 @@ export default function App() {
       prev.map((m) => (m.id === id ? { ...m, ...updates } : m))
     );
   }, []);
+
+  const handlePointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+    const face = lastFaceTransformRef.current;
+    if (!selectedMaskId || !face) return;
+    const selectedMask = masks.find((m) => m.id === selectedMaskId);
+    if (!selectedMask || !selectedMask.visible) return;
+
+    const bounds = getMaskBounds(selectedMask.strokes);
+    if (!bounds) return;
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const clickY = e.clientY - rect.top;
+    const w = rect.width;
+    const h = rect.height;
+
+    const centerPt = faceRelativeToCanvas(
+      { fx: bounds.centerX, fy: bounds.centerY },
+      face,
+      selectedMask.scale,
+      selectedMask.offsetX,
+      selectedMask.offsetY,
+      selectedMask.mirror,
+    );
+    const scalePt = faceRelativeToCanvas(
+      { fx: bounds.maxFx, fy: bounds.maxFy },
+      face,
+      selectedMask.scale,
+      selectedMask.offsetX,
+      selectedMask.offsetY,
+      selectedMask.mirror,
+    );
+
+    const cx = centerPt.x * w;
+    const cy = centerPt.y * h;
+    const sx = scalePt.x * w;
+    const sy = scalePt.y * h;
+
+    const distToCenter = Math.hypot(clickX - cx, clickY - cy);
+    const distToScale = Math.hypot(clickX - sx, clickY - sy);
+
+    let mode: "idle" | "drag" | "scale" = "idle";
+    if (distToCenter < 35) {
+      mode = "drag";
+    } else if (distToScale < 35) {
+      mode = "scale";
+    }
+
+    if (mode === "idle") return;
+
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+
+    mouseEditStateRef.current = {
+      mode,
+      startHandX: clickX,
+      startHandY: clickY,
+      startOffsetX: selectedMask.offsetX,
+      startOffsetY: selectedMask.offsetY,
+      startScale: selectedMask.scale,
+      startDist: Math.hypot(clickX - cx, clickY - cy),
+    };
+
+    const handlePointerMove = (moveEvt: PointerEvent) => {
+      const curX = moveEvt.clientX - rect.left;
+      const curY = moveEvt.clientY - rect.top;
+      const currentFace = lastFaceTransformRef.current;
+      if (!currentFace) return;
+
+      if (mouseEditStateRef.current.mode === "drag") {
+        const dx = curX - mouseEditStateRef.current.startHandX;
+        const dy = curY - mouseEditStateRef.current.startHandY;
+
+        const dnx = dx / w;
+        const dny = dy / h;
+        const dfx = dnx / currentFace.scale;
+        const dfy = dny / currentFace.scale;
+
+        const cos = Math.cos(-currentFace.angle);
+        const sin = Math.sin(-currentFace.angle);
+        const rdfx = dfx * cos - dfy * sin;
+        const rdfy = dfx * sin + dfy * cos;
+
+        handleUpdateMask(selectedMask.id, {
+          offsetX: mouseEditStateRef.current.startOffsetX + rdfx,
+          offsetY: mouseEditStateRef.current.startOffsetY + rdfy,
+        });
+      } else if (mouseEditStateRef.current.mode === "scale") {
+        const curDist = Math.hypot(curX - cx, curY - cy);
+        const startDist = mouseEditStateRef.current.startDist;
+        if (startDist > 5) {
+          const ratio = curDist / startDist;
+          const newScale = Math.min(2.5, Math.max(0.3, mouseEditStateRef.current.startScale * ratio));
+          handleUpdateMask(selectedMask.id, { scale: newScale });
+        }
+      }
+    };
+
+    const handlePointerUp = (upEvt: PointerEvent) => {
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch (err) {}
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      mouseEditStateRef.current.mode = "idle";
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+  }, [masks, selectedMaskId, handleUpdateMask]);
 
   const handleDrawingHandChange = useCallback((hand: "Left" | "Right") => {
     setDrawingHand(hand);
@@ -406,6 +558,7 @@ export default function App() {
         lctx.fill();
         lctx.restore();
 
+        // Render AR Masks
         for (const mask of masksRef.current) {
           if (!mask.visible) continue;
           lctx.save();
@@ -423,6 +576,66 @@ export default function App() {
             drawStroke(lctx, { ...stroke, points: normalizedPoints }, w, h);
           }
           lctx.restore();
+        }
+
+        // Render Bounding Box and Handles for SELECTED mask
+        if (selectedMaskIdRef.current) {
+          const selectedMask = masksRef.current.find((m) => m.id === selectedMaskIdRef.current);
+          if (selectedMask && selectedMask.visible) {
+            const bounds = getMaskBounds(selectedMask.strokes);
+            if (bounds) {
+              const tl = faceRelativeToCanvas({ fx: bounds.minFx, fy: bounds.minFy }, faceTransform, selectedMask.scale, selectedMask.offsetX, selectedMask.offsetY);
+              const tr = faceRelativeToCanvas({ fx: bounds.maxFx, fy: bounds.minFy }, faceTransform, selectedMask.scale, selectedMask.offsetX, selectedMask.offsetY);
+              const br = faceRelativeToCanvas({ fx: bounds.maxFx, fy: bounds.maxFy }, faceTransform, selectedMask.scale, selectedMask.offsetX, selectedMask.offsetY);
+              const bl = faceRelativeToCanvas({ fx: bounds.minFx, fy: bounds.maxFy }, faceTransform, selectedMask.scale, selectedMask.offsetX, selectedMask.offsetY);
+
+              const tlx = tl.x * w, tly = tl.y * h;
+              const trx = tr.x * w, tr_y = tr.y * h;
+              const brx = br.x * w, bry = br.y * h;
+              const blx = bl.x * w, bly = bl.y * h;
+
+              lctx.save();
+              lctx.strokeStyle = "rgba(34, 211, 238, 0.65)";
+              lctx.lineWidth = 1.8;
+              lctx.setLineDash([6, 4]);
+              lctx.beginPath();
+              lctx.moveTo(tlx, tly);
+              lctx.lineTo(trx, tr_y);
+              lctx.lineTo(brx, bry);
+              lctx.lineTo(blx, bly);
+              lctx.closePath();
+              lctx.stroke();
+
+              // Draw Center Handle (Move)
+              const centerPt = faceRelativeToCanvas({ fx: bounds.centerX, fy: bounds.centerY }, faceTransform, selectedMask.scale, selectedMask.offsetX, selectedMask.offsetY);
+              const cx = centerPt.x * w, cy = centerPt.y * h;
+              lctx.beginPath();
+              lctx.arc(cx, cy, 14, 0, Math.PI * 2);
+              lctx.fillStyle = "rgba(34, 211, 238, 0.25)";
+              lctx.strokeStyle = "rgba(34, 211, 238, 0.95)";
+              lctx.lineWidth = 2.2;
+              lctx.setLineDash([]);
+              lctx.fill();
+              lctx.stroke();
+
+              // Center target dot
+              lctx.beginPath();
+              lctx.arc(cx, cy, 4, 0, Math.PI * 2);
+              lctx.fillStyle = "#ffffff";
+              lctx.fill();
+
+              // Draw Scale Handle (Bottom-Right)
+              lctx.beginPath();
+              lctx.arc(brx, bry, 12, 0, Math.PI * 2);
+              lctx.fillStyle = "rgba(236, 72, 153, 0.25)";
+              lctx.strokeStyle = "rgba(236, 72, 153, 0.95)";
+              lctx.lineWidth = 2.2;
+              lctx.fill();
+              lctx.stroke();
+
+              lctx.restore();
+            }
+          }
         }
       }
 
@@ -533,7 +746,103 @@ export default function App() {
         const handUiState: UiState = isUiHand
           ? uiState
           : { overUi: f.overUi, mode: f.overUi ? "hover" : "idle" };
-        const blocked = handUiState.overUi || f.state.pinchFromUi;
+
+        // Intercept pinch for direct AR Mask manipulation (dragging/scaling)
+        let maskIntercept = false;
+        if (selectedMaskIdRef.current && faceTransform) {
+          const selectedMask = masksRef.current.find((m) => m.id === selectedMaskIdRef.current);
+          if (selectedMask && selectedMask.visible) {
+            const bounds = getMaskBounds(selectedMask.strokes);
+            if (bounds) {
+              const centerPt = faceRelativeToCanvas(
+                { fx: bounds.centerX, fy: bounds.centerY },
+                faceTransform,
+                selectedMask.scale,
+                selectedMask.offsetX,
+                selectedMask.offsetY,
+              );
+              const scalePt = faceRelativeToCanvas(
+                { fx: bounds.maxFx, fy: bounds.maxFy },
+                faceTransform,
+                selectedMask.scale,
+                selectedMask.offsetX,
+                selectedMask.offsetY,
+              );
+              const cx = centerPt.x * w;
+              const cy = centerPt.y * h;
+              const sx = scalePt.x * w;
+              const sy = scalePt.y * h;
+
+              const distToCenter = Math.hypot(f.pt.x - cx, f.pt.y - cy);
+              const distToScale = Math.hypot(f.pt.x - sx, f.pt.y - sy);
+
+              if (maskEditStateRef.current.mode === "idle") {
+                if (f.hand.pinching && !f.state.prevPinch) {
+                  if (distToCenter < 40) {
+                    maskEditStateRef.current = {
+                      mode: "drag",
+                      startHandX: f.pt.x,
+                      startHandY: f.pt.y,
+                      startOffsetX: selectedMask.offsetX,
+                      startOffsetY: selectedMask.offsetY,
+                      startScale: selectedMask.scale,
+                      startDist: 0,
+                    };
+                    f.state.pinchFromUi = true;
+                    maskIntercept = true;
+                  } else if (distToScale < 40) {
+                    maskEditStateRef.current = {
+                      mode: "scale",
+                      startHandX: f.pt.x,
+                      startHandY: f.pt.y,
+                      startOffsetX: selectedMask.offsetX,
+                      startOffsetY: selectedMask.offsetY,
+                      startScale: selectedMask.scale,
+                      startDist: Math.hypot(f.pt.x - cx, f.pt.y - cy),
+                    };
+                    f.state.pinchFromUi = true;
+                    maskIntercept = true;
+                  }
+                }
+              } else if (f.hand.pinching) {
+                f.state.pinchFromUi = true;
+                maskIntercept = true;
+
+                if (maskEditStateRef.current.mode === "drag") {
+                  const dx = f.pt.x - maskEditStateRef.current.startHandX;
+                  const dy = f.pt.y - maskEditStateRef.current.startHandY;
+
+                  const dnx = dx / w;
+                  const dny = dy / h;
+                  const dfx = dnx / faceTransform.scale;
+                  const dfy = dny / faceTransform.scale;
+
+                  const cos = Math.cos(-faceTransform.angle);
+                  const sin = Math.sin(-faceTransform.angle);
+                  const rdfx = dfx * cos - dfy * sin;
+                  const rdfy = dfx * sin + dfy * cos;
+
+                  handleUpdateMask(selectedMask.id, {
+                    offsetX: maskEditStateRef.current.startOffsetX + rdfx,
+                    offsetY: maskEditStateRef.current.startOffsetY + rdfy,
+                  });
+                } else if (maskEditStateRef.current.mode === "scale") {
+                  const curDist = Math.hypot(f.pt.x - cx, f.pt.y - cy);
+                  const startDist = maskEditStateRef.current.startDist;
+                  if (startDist > 10) {
+                    const ratio = curDist / startDist;
+                    const newScale = Math.min(2.5, Math.max(0.3, maskEditStateRef.current.startScale * ratio));
+                    handleUpdateMask(selectedMask.id, { scale: newScale });
+                  }
+                }
+              } else {
+                maskEditStateRef.current.mode = "idle";
+              }
+            }
+          }
+        }
+
+        const blocked = handUiState.overUi || f.state.pinchFromUi || maskIntercept;
 
         if (f.hand.pinching && !blocked) {
           let stroke = f.state.stroke;
@@ -680,9 +989,11 @@ export default function App() {
               mask.scale,
               mask.offsetX,
               mask.offsetY,
+              mask.mirror,
             )
           );
-          drawStroke(ctx, { ...stroke, points: normalizedPoints }, w, h);
+          const strokeColor = mask.colorOverride || stroke.color;
+          drawStroke(ctx, { ...stroke, color: strokeColor, points: normalizedPoints }, w, h);
         }
         ctx.restore();
       }
@@ -765,7 +1076,7 @@ export default function App() {
       />
       <div className="dim" />
       <canvas ref={baseRef} className="layer" />
-      <canvas ref={liveRef} className="layer live" />
+      <canvas ref={liveRef} className="layer live" onPointerDown={handlePointerDown} />
 
       <TopBar status={status} handPresent={handPresent} />
 
