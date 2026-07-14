@@ -12,7 +12,7 @@ export interface UiState {
 
 const INTERACTIVE_SELECTOR = "button, input, label";
 const UI_CONTAINER_SELECTOR =
-  ".dock, .topbar, .actions-panel, .save-menu, .overlay-card, .mask-widget";
+  ".dock, .topbar, .actions-panel, .save-menu, .overlay-card, .mask-widget, .mask-def-hud";
 
 /** How far (px) the pointer may drift off a control before hover drops. */
 const STICKY_MARGIN = 16;
