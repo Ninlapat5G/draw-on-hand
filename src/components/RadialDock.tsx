@@ -186,7 +186,7 @@ export function RadialDock({
       <button
         className="dock-hub"
         data-drag="dock"
-        title={expanded ? "Collapse tools (drag to move)" : "Open tools (drag to move)"}
+        title={expanded ? "ย่อเมนูเครื่องมือ (ลากเพื่อย้าย)" : "เปิดเมนูเครื่องมือ (ลากเพื่อย้าย)"}
         onPointerDown={drag.onPointerDown}
         onClick={() => {
           if (!drag.wasDragged()) onToggle();

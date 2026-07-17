@@ -57,6 +57,13 @@ export const UndoIcon = () => (
   </svg>
 );
 
+export const RedoIcon = () => (
+  <svg {...base()}>
+    <path d="M21 7v6h-6" />
+    <path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6.7 3L21 13" />
+  </svg>
+);
+
 export const TrashIcon = () => (
   <svg {...base()}>
     <path d="M3 6h18" />

@@ -9,15 +9,15 @@ interface TopBarProps {
 function statusText(status: AppStatus, handPresent: boolean): string {
   switch (status) {
     case "loading-model":
-      return "Loading hand tracking…";
+      return "กำลังโหลดระบบติดตามมือ…";
     case "starting-camera":
-      return "Starting camera…";
+      return "กำลังเปิดกล้อง…";
     case "camera-denied":
-      return "Camera blocked";
+      return "กล้องถูกปิดกั้น";
     case "error":
-      return "Tracking unavailable";
+      return "ระบบติดตามใช้งานไม่ได้";
     case "ready":
-      return handPresent ? "Hand detected" : "Show your hand to the camera";
+      return handPresent ? "ตรวจพบมือแล้ว" : "ยกมือให้กล้องเห็น";
   }
 }
 

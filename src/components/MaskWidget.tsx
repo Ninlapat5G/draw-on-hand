@@ -1,4 +1,4 @@
-import type { RefObject } from "react";
+import type { CSSProperties, RefObject } from "react";
 import type { MaskLayer } from "../types";
 import { usePointerDrag } from "../lib/useDrag";
 import {
@@ -48,14 +48,14 @@ export function MaskWidget({
         <button
           className="icon-btn grip"
           data-drag="mask"
-          title="Move panel (drag)"
+          title="ย้ายแผง (ลาก)"
           onPointerDown={drag.onPointerDown}
           onClick={(e) => e.preventDefault()}
         >
           <GripIcon />
         </button>
         <span className="widget-title">Mask Studio</span>
-        <button className="icon-btn close-btn" onClick={onClose} title="Close Panel">
+        <button className="icon-btn close-btn" onClick={onClose} title="ปิดแผง">
           <CloseIcon />
         </button>
       </div>
@@ -63,11 +63,11 @@ export function MaskWidget({
       <div className="widget-content">
         {/* Mask Layers List */}
         <div className="mask-section">
-          <div className="section-title">Face Masks</div>
+          <div className="section-title">หน้ากากทั้งหมด</div>
           {masks.length === 0 ? (
             <p className="no-masks-hint">
-              No face masks created yet.<br />
-              Draw something and click the mask button in the toolbar to bake it onto your face.
+              ยังไม่มีหน้ากาก AR<br />
+              วาดรูปบนหน้าจอ แล้วกดปุ่มหน้ากากในแผงเครื่องมือเพื่อติดภาพวาดเข้ากับใบหน้า
             </p>
           ) : (
             <div className="mask-list">
@@ -82,7 +82,7 @@ export function MaskWidget({
                     <button
                       className={`icon-btn ${mask.visible ? "visible" : "hidden"}`}
                       onClick={() => onToggleVisible(mask.id)}
-                      title={mask.visible ? "Hide Mask" : "Show Mask"}
+                      title={mask.visible ? "ซ่อนหน้ากาก" : "แสดงหน้ากาก"}
                     >
                       {mask.visible ? <EyeIcon /> : <EyeOffIcon />}
                     </button>
@@ -94,7 +94,7 @@ export function MaskWidget({
                           onSelectMask(null);
                         }
                       }}
-                      title="Delete Mask"
+                      title="ลบหน้ากาก"
                     >
                       <TrashIcon />
                     </button>
@@ -108,11 +108,11 @@ export function MaskWidget({
         {/* Customization controls for selected mask */}
         {selectedMask && (
           <div className="mask-section controls-section">
-            <div className="section-title">Customize: {selectedMask.name}</div>
+            <div className="section-title">ปรับแต่ง: {selectedMask.name}</div>
 
             {/* Scale Slider */}
             <div className="settings-row">
-              <span className="settings-label">Scale</span>
+              <span className="settings-label">ขนาด</span>
               <span className="settings-value">
                 {selectedMask.scale.toFixed(2)}x
               </span>
@@ -131,7 +131,7 @@ export function MaskWidget({
 
             {/* Offset X Slider */}
             <div className="settings-row">
-              <span className="settings-label">Offset X</span>
+              <span className="settings-label">เลื่อนแนวนอน</span>
               <span className="settings-value">
                 {selectedMask.offsetX > 0 ? "+" : ""}
                 {selectedMask.offsetX.toFixed(2)}
@@ -151,7 +151,7 @@ export function MaskWidget({
 
             {/* Offset Y Slider */}
             <div className="settings-row">
-              <span className="settings-label">Offset Y</span>
+              <span className="settings-label">เลื่อนแนวตั้ง</span>
               <span className="settings-value">
                 {selectedMask.offsetY > 0 ? "+" : ""}
                 {selectedMask.offsetY.toFixed(2)}
@@ -171,7 +171,7 @@ export function MaskWidget({
 
             {/* Opacity Slider */}
             <div className="settings-row">
-              <span className="settings-label">Opacity</span>
+              <span className="settings-label">ความทึบ</span>
               <span className="settings-value">
                 {(selectedMask.opacity * 100).toFixed(0)}%
               </span>
@@ -190,7 +190,7 @@ export function MaskWidget({
 
             {/* Mirror Mask Toggle */}
             <div className="settings-row mirror-row">
-              <span className="settings-label">Mirror mask</span>
+              <span className="settings-label">กลับด้านซ้าย–ขวา</span>
               <input
                 type="checkbox"
                 className="settings-checkbox"
@@ -203,37 +203,19 @@ export function MaskWidget({
 
             {/* Color override picker */}
             <div className="settings-row color-override-row" style={{ marginTop: "12px" }}>
-              <span className="settings-label">Color Filter</span>
-              <div className="color-swatches" style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginTop: "4px" }}>
+              <span className="settings-label">สีทับลายเส้น</span>
+              <div className="color-swatches">
                 <button
                   className={`color-swatch original ${!selectedMask.colorOverride ? "active" : ""}`}
                   onClick={() => onUpdateMask(selectedMask.id, { colorOverride: undefined })}
-                  title="Original Color"
-                  style={{
-                    width: "20px",
-                    height: "20px",
-                    borderRadius: "50%",
-                    border: "2px solid rgba(255,255,255,0.2)",
-                    cursor: "pointer",
-                    background: "linear-gradient(45deg, #f43f5e, #22d3ee, #10b981)",
-                    boxShadow: !selectedMask.colorOverride ? "0 0 8px #22d3ee" : "none",
-                  }}
+                  title="สีดั้งเดิม"
                 />
                 {["#22d3ee", "#f43f5e", "#10b981", "#fbbf24", "#a855f7", "#ffffff"].map((color) => (
                   <button
                     key={color}
                     className={`color-swatch ${selectedMask.colorOverride === color ? "active" : ""}`}
                     onClick={() => onUpdateMask(selectedMask.id, { colorOverride: color })}
-                    style={{
-                      width: "20px",
-                      height: "20px",
-                      borderRadius: "50%",
-                      border: selectedMask.colorOverride === color ? "2px solid #ffffff" : "2px solid rgba(255,255,255,0.2)",
-                      backgroundColor: color,
-                      cursor: "pointer",
-                      boxShadow: selectedMask.colorOverride === color ? `0 0 8px ${color}` : "none",
-                      transition: "transform 0.15s ease",
-                    }}
+                    style={{ "--sw": color } as CSSProperties}
                     title={color}
                   />
                 ))}
@@ -253,7 +235,7 @@ export function MaskWidget({
                 })
               }
             >
-              Reset parameters
+              รีเซ็ตค่าทั้งหมด
             </button>
           </div>
         )}

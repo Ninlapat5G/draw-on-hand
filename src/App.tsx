@@ -4,6 +4,7 @@ import { ActionsPanel } from "./components/ActionsPanel";
 import { RadialDock } from "./components/RadialDock";
 import { TopBar } from "./components/TopBar";
 import { MaskWidget } from "./components/MaskWidget";
+import { Toasts, type ToastItem, type ToastKind } from "./components/Toasts";
 import { AlertIcon } from "./components/icons";
 import { savePng } from "./lib/capture";
 import {
@@ -32,6 +33,7 @@ import type { AppStatus, Stroke, Tool, MaskLayer, MaskStroke } from "./types";
 
 const DEFAULT_TOOL: Tool = { style: "pen", color: "#22d3ee", size: 10 };
 const PINCH_STORAGE_KEY = "draw-on-hand.pinchRatio";
+const ONBOARD_STORAGE_KEY = "draw-on-hand.onboarded";
 
 /** Which handle of the mask-definition box an interaction targets. */
 type DefEditMode =
@@ -72,6 +74,8 @@ export default function App() {
   const liveRef = useRef<HTMLCanvasElement>(null);
 
   const strokesRef = useRef<Stroke[]>([]);
+  /** strokes undone and waiting for a possible redo */
+  const redoRef = useRef<Stroke[]>([]);
   const pinchConfigRef = useRef<PinchConfig>({ ratioStart: loadPinchRatio() });
   const handsRef = useRef(new Map<string, HandState>());
   const uiRef = useRef(new HandUiController());
@@ -85,7 +89,12 @@ export default function App() {
   const [status, setStatus] = useState<AppStatus>("loading-model");
   const [handPresent, setHandPresent] = useState(false);
   const [strokeCount, setStrokeCount] = useState(0);
+  const [redoCount, setRedoCount] = useState(0);
   const [hasDrawn, setHasDrawn] = useState(false);
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [onboardingOpen, setOnboardingOpen] = useState(
+    () => localStorage.getItem(ONBOARD_STORAGE_KEY) !== "1",
+  );
   const [cameraVisible, setCameraVisible] = useState(true);
   const [flashKey, setFlashKey] = useState(0);
   const [pinchRatio, setPinchRatio] = useState(
@@ -222,6 +231,43 @@ export default function App() {
     startScale: 1,
     startDist: 0,
   });
+
+  const toastIdRef = useRef(0);
+
+  const dismissToast = useCallback((id: number) => {
+    setToasts((t) => t.filter((x) => x.id !== id));
+  }, []);
+
+  const showToast = useCallback(
+    (
+      text: string,
+      opts?: {
+        kind?: ToastKind;
+        actionLabel?: string;
+        onAction?: () => void;
+        duration?: number;
+      },
+    ) => {
+      const id = ++toastIdRef.current;
+      setToasts((t) => [
+        ...t.slice(-2),
+        {
+          id,
+          text,
+          kind: opts?.kind ?? "info",
+          actionLabel: opts?.actionLabel,
+          onAction: opts?.onAction,
+        },
+      ]);
+      window.setTimeout(() => dismissToast(id), opts?.duration ?? 5200);
+    },
+    [dismissToast],
+  );
+
+  const dismissOnboarding = useCallback(() => {
+    setOnboardingOpen(false);
+    localStorage.setItem(ONBOARD_STORAGE_KEY, "1");
+  }, []);
 
   const handleSelectMask = useCallback((id: string | null) => {
     setSelectedMaskId(id);
@@ -610,6 +656,11 @@ export default function App() {
     }
     strokesRef.current.push(stroke);
     setStrokeCount(strokesRef.current.length);
+    // A fresh stroke invalidates the redo history.
+    if (redoRef.current.length > 0) {
+      redoRef.current = [];
+      setRedoCount(0);
+    }
   }, []);
 
   // ---------- Tracking pipeline ----------
@@ -937,7 +988,7 @@ export default function App() {
         lctx.fill();
 
         // Draw text label above box
-        lctx.font = '600 11px "Outfit", sans-serif';
+        lctx.font = '600 11px "Outfit", "Noto Sans Thai", sans-serif';
         lctx.fillStyle = "#fb923c";
         lctx.textAlign = "center";
         lctx.fillText("ขอบเขตหน้ากาก (DRAG CORNERS)", cx, y1 - 12);
@@ -1443,20 +1494,45 @@ export default function App() {
   // ---------- Actions ----------
 
   const undo = useCallback(() => {
-    if (strokesRef.current.length === 0) return;
-    strokesRef.current.pop();
+    const stroke = strokesRef.current.pop();
+    if (!stroke) return;
+    redoRef.current.push(stroke);
+    setRedoCount(redoRef.current.length);
+    setStrokeCount(strokesRef.current.length);
+    replay();
+  }, [replay]);
+
+  const redo = useCallback(() => {
+    const stroke = redoRef.current.pop();
+    if (!stroke) return;
+    strokesRef.current.push(stroke);
+    setRedoCount(redoRef.current.length);
     setStrokeCount(strokesRef.current.length);
     replay();
   }, [replay]);
 
   const clearAll = useCallback(() => {
+    if (strokesRef.current.length === 0) return;
+    // Keep the cleared strokes so the toast can restore them (forgiveness
+    // for a destructive action that can be triggered by a stray pinch).
+    const snapshot = strokesRef.current;
     strokesRef.current = [];
+    redoRef.current = [];
+    setRedoCount(0);
     for (const state of handsRef.current.values()) {
       state.stroke = null;
     }
     setStrokeCount(0);
     replay();
-  }, [replay]);
+    showToast("ล้างภาพวาดทั้งหมดแล้ว", {
+      actionLabel: "กู้คืน",
+      onAction: () => {
+        strokesRef.current = snapshot;
+        setStrokeCount(snapshot.length);
+        replay();
+      },
+    });
+  }, [replay, showToast]);
 
   const handleSave = useCallback((includeCamera: boolean) => {
     const base = baseRef.current;
@@ -1495,11 +1571,14 @@ export default function App() {
 
     // Replay to clear the temporary masks off the base canvas
     replay();
-  }, [masks, replay]);
+    showToast("บันทึกรูปภาพ PNG ลงเครื่องแล้ว", { kind: "success" });
+  }, [masks, replay, showToast]);
 
   const startMaskDefinition = useCallback(() => {
     if (strokesRef.current.length === 0) {
-      alert("กรุณาวาดลายเส้นบนหน้าจอก่อนกดสร้างหน้ากาก");
+      showToast("วาดลายเส้นบนหน้าจอก่อน แล้วค่อยกดสร้างหน้ากาก", {
+        kind: "error",
+      });
       return;
     }
 
@@ -1534,12 +1613,14 @@ export default function App() {
       anchorX: cx,
       anchorY: cy,
     });
-  }, []);
+  }, [showToast]);
 
   const confirmBakeMask = useCallback(() => {
     const face = lastFaceTransformRef.current;
     if (!face) {
-      alert("ไม่พบใบหน้าในกล้องเพื่อยึดตำแหน่งหน้ากาก กรุณาขยับหน้าให้อยู่ในหน้าจอ");
+      showToast("ไม่พบใบหน้าในกล้อง — ขยับหน้าให้อยู่ในจอแล้วลองอีกครั้ง", {
+        kind: "error",
+      });
       return;
     }
 
@@ -1568,7 +1649,9 @@ export default function App() {
     }
 
     if (selectedStrokes.length === 0) {
-      alert("ไม่พบเส้นวาดใดๆ ในขอบเขตที่เลือก กรุณาขยายขอบเขตให้ครอบคลุมรูปวาด");
+      showToast("ไม่พบลายเส้นในขอบเขตที่เลือก — ขยายกรอบให้ครอบคลุมรูปวาด", {
+        kind: "error",
+      });
       return;
     }
 
@@ -1618,18 +1701,29 @@ export default function App() {
     replay();
 
     setMaskDefinition((d) => ({ ...d, active: false }));
-  }, [maskDefinition, masks.length, replay]);
+    showToast(`สร้าง "${newMask.name}" แล้ว — หน้ากากจะขยับตามใบหน้าของคุณ`, {
+      kind: "success",
+    });
+  }, [maskDefinition, masks.length, replay, showToast]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const key = e.key.toLowerCase();
+      if (key === "z" && e.shiftKey) {
+        e.preventDefault();
+        redo();
+      } else if (key === "z") {
         e.preventDefault();
         undo();
+      } else if (key === "y") {
+        e.preventDefault();
+        redo();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo]);
+  }, [undo, redo]);
 
   // ---------- Render ----------
 
@@ -1655,10 +1749,12 @@ export default function App() {
         pos={actionsPos}
         onMove={(dx, dy) => movePanel("actions", dx, dy)}
         canUndo={strokeCount > 0}
+        canRedo={redoCount > 0}
         cameraVisible={cameraVisible}
         pinchRatio={pinchRatio}
         onPinchRatio={handlePinchRatio}
         onUndo={undo}
+        onRedo={redo}
         onClear={clearAll}
         onToggleCamera={() => setCameraVisible((v) => !v)}
         onSave={handleSave}
@@ -1698,11 +1794,10 @@ export default function App() {
         />
       )}
 
-      {status === "ready" && !hasDrawn && (
+      {status === "ready" && !hasDrawn && !onboardingOpen && (
         <div className="hint glass">
           <span className="emoji">🤏</span>
-          Touch your thumb &amp; index tips to draw — pinch buttons to click,
-          pinch-hold the hub to move it
+          จีบนิ้วโป้งกับนิ้วชี้เพื่อวาด — ชี้ที่ปุ่มแล้วจีบเพื่อคลิก
         </div>
       )}
 
@@ -1715,18 +1810,62 @@ export default function App() {
         onMove={(dx, dy) => movePanel("dock", dx, dy)}
       />
 
+      {status === "ready" && onboardingOpen && (
+        <div className="overlay-center onboarding">
+          <div className="overlay-card glass onboard-card">
+            <div className="onboard-badge">🖐️</div>
+            <h2>วาดภาพกลางอากาศด้วยมือของคุณ</h2>
+            <ul className="onboard-steps">
+              <li>
+                <span className="step-emoji">🤏</span>
+                <div>
+                  <strong>จีบนิ้วเพื่อวาด</strong>
+                  <span>
+                    แตะปลายนิ้วโป้งกับนิ้วชี้เข้าด้วยกันแล้วลากมือ
+                    ปล่อยนิ้วเพื่อหยุดเส้น
+                  </span>
+                </div>
+              </li>
+              <li>
+                <span className="step-emoji">👆</span>
+                <div>
+                  <strong>ชี้แล้วจีบเพื่อคลิกปุ่ม</strong>
+                  <span>
+                    เลื่อนปลายนิ้วไปเหนือปุ่มใดก็ได้ วงแหวนจะแสดงระยะจีบ
+                    จีบเพื่อกดปุ่มนั้น
+                  </span>
+                </div>
+              </li>
+              <li>
+                <span className="step-emoji">🎨</span>
+                <div>
+                  <strong>เมนูวงกลมด้านล่าง</strong>
+                  <span>
+                    เปิดเพื่อเลือกแปรง สี และขนาดเส้น —
+                    จีบค้างที่ปุ่มกลางแล้วลากเพื่อย้ายตำแหน่ง
+                  </span>
+                </div>
+              </li>
+            </ul>
+            <button className="retry-btn" onClick={dismissOnboarding}>
+              เริ่มวาดเลย
+            </button>
+          </div>
+        </div>
+      )}
+
       {loading && (
         <div className="overlay-center">
           <div className="overlay-card glass">
             <div className="spinner" />
             <h2>
               {status === "loading-model"
-                ? "Loading hand tracking…"
-                : "Starting camera…"}
+                ? "กำลังโหลดระบบติดตามมือ…"
+                : "กำลังเปิดกล้อง…"}
             </h2>
             <p>
-              Everything runs locally in your browser — no video ever leaves
-              your device.
+              ทุกอย่างประมวลผลในเบราว์เซอร์ของคุณเท่านั้น —
+              ไม่มีการส่งภาพวิดีโอออกนอกอุปกรณ์
             </p>
           </div>
         </div>
@@ -1740,20 +1879,22 @@ export default function App() {
             </div>
             <h2>
               {status === "camera-denied"
-                ? "Camera access needed"
-                : "Something went wrong"}
+                ? "ต้องอนุญาตให้เข้าถึงกล้อง"
+                : "เกิดข้อผิดพลาด"}
             </h2>
             <p>
               {status === "camera-denied"
-                ? "Draw on Hand draws with your hand, so it needs your camera. Allow camera access in the browser's address bar, then try again."
-                : "Hand tracking could not start. Check your connection and GPU support, then try again."}
+                ? "Draw on Hand ใช้มือของคุณในการวาด จึงต้องใช้กล้อง กดอนุญาตการเข้าถึงกล้องที่แถบที่อยู่ของเบราว์เซอร์ แล้วลองอีกครั้ง"
+                : "ไม่สามารถเริ่มระบบติดตามมือได้ ตรวจสอบอินเทอร์เน็ตและการรองรับ GPU ของเครื่อง แล้วลองอีกครั้ง"}
             </p>
             <button className="retry-btn" onClick={() => location.reload()}>
-              Try again
+              ลองอีกครั้ง
             </button>
           </div>
         </div>
       )}
+
+      <Toasts toasts={toasts} onDismiss={dismissToast} />
 
       {flashKey > 0 && <div key={flashKey} className="flash" />}
     </div>
