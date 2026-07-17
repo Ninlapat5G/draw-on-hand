@@ -24,15 +24,46 @@ export async function createHandLandmarker(): Promise<HandLandmarker> {
   });
 }
 
+/**
+ * Dev/demo camera: an animated canvas stream so the full tracking pipeline
+ * (and its real inference cost) runs on machines without a camera.
+ * Enabled with `?mock=1` in the URL.
+ */
+function createMockCameraStream(): MediaStream {
+  const canvas = document.createElement("canvas");
+  canvas.width = 1280;
+  canvas.height = 720;
+  const ctx = canvas.getContext("2d")!;
+  const draw = () => {
+    const t = performance.now() / 1000;
+    ctx.fillStyle = "#141a28";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // Moving blobs keep every frame unique so detectForVideo runs each tick.
+    for (let i = 0; i < 3; i++) {
+      const x = (Math.sin(t * (0.7 + i * 0.3) + i * 2) * 0.5 + 0.5) * 1100 + 90;
+      const y = (Math.cos(t * (0.5 + i * 0.2) + i) * 0.5 + 0.5) * 560 + 80;
+      ctx.fillStyle = `hsl(${220 + i * 30} 30% ${22 + i * 6}%)`;
+      ctx.beginPath();
+      ctx.arc(x, y, 90 + i * 40, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    requestAnimationFrame(draw);
+  };
+  draw();
+  return canvas.captureStream(30);
+}
+
 export async function startCamera(video: HTMLVideoElement): Promise<MediaStream> {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: {
-      facingMode: "user",
-      width: { ideal: 1280 },
-      height: { ideal: 720 },
-    },
-    audio: false,
-  });
+  const stream = new URLSearchParams(location.search).has("mock")
+    ? createMockCameraStream()
+    : await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: "user",
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
+      });
   video.srcObject = stream;
   await video.play();
   return stream;
