@@ -6,6 +6,8 @@ import {
   MIN_PINCH_RATIO,
 } from "../lib/gestures";
 import { usePointerDrag } from "../lib/useDrag";
+import type { SaveMode } from "../lib/capture";
+import type { SymmetryMode } from "../types";
 import {
   CameraIcon,
   CameraOffIcon,
@@ -14,13 +16,23 @@ import {
   DownloadIcon,
   GripIcon,
   ImageIcon,
+  KaleidoIcon,
   LayersIcon,
   MaskIcon,
+  MirrorIcon,
+  PlayIcon,
   RedoIcon,
   SettingsIcon,
+  TransparentIcon,
   TrashIcon,
   UndoIcon,
 } from "./icons";
+
+const SYMMETRY_LABEL: Record<SymmetryMode, string> = {
+  off: "สมมาตร: ปิด",
+  mirror: "สมมาตร: กระจกซ้าย–ขวา",
+  kaleido: "สมมาตร: คาไลโดสโคป 4 ทิศ",
+};
 
 interface ActionsPanelProps {
   innerRef: RefObject<HTMLDivElement>;
@@ -35,7 +47,10 @@ interface ActionsPanelProps {
   onRedo: () => void;
   onClear: () => void;
   onToggleCamera: () => void;
-  onSave: (includeCamera: boolean) => void;
+  onSave: (mode: SaveMode) => void;
+  symmetry: SymmetryMode;
+  onCycleSymmetry: () => void;
+  onReplayAnimation: () => void;
   drawingHand: "Left" | "Right";
   onDrawingHandChange: (hand: "Left" | "Right") => void;
   onCreateMask: () => void;
@@ -61,6 +76,9 @@ export function ActionsPanel({
   onClear,
   onToggleCamera,
   onSave,
+  symmetry,
+  onCycleSymmetry,
+  onReplayAnimation,
   drawingHand,
   onDrawingHandChange,
   onCreateMask,
@@ -131,6 +149,21 @@ export function ActionsPanel({
           <TrashIcon />
         </button>
         <button
+          className={`icon-btn ${symmetry !== "off" ? "active" : ""}`}
+          onClick={onCycleSymmetry}
+          title={`${SYMMETRY_LABEL[symmetry]} (กดเพื่อสลับโหมด)`}
+        >
+          {symmetry === "kaleido" ? <KaleidoIcon /> : <MirrorIcon />}
+        </button>
+        <button
+          className="icon-btn"
+          onClick={onReplayAnimation}
+          disabled={!canUndo}
+          title="เล่นย้อนขั้นตอนการวาด"
+        >
+          <PlayIcon />
+        </button>
+        <button
           className="icon-btn"
           onClick={onToggleCamera}
           title={cameraVisible ? "ซ่อนภาพกล้อง" : "แสดงภาพกล้อง"}
@@ -165,7 +198,7 @@ export function ActionsPanel({
               <button
                 onClick={() => {
                   setMenuOpen(false);
-                  onSave(true);
+                  onSave("camera");
                 }}
               >
                 <ImageIcon />
@@ -177,13 +210,25 @@ export function ActionsPanel({
               <button
                 onClick={() => {
                   setMenuOpen(false);
-                  onSave(false);
+                  onSave("dark");
                 }}
               >
                 <LayersIcon />
                 <span>
                   เฉพาะลายเส้น
                   <span className="menu-sub">ลายเส้นบนพื้นหลังเข้ม</span>
+                </span>
+              </button>
+              <button
+                onClick={() => {
+                  setMenuOpen(false);
+                  onSave("transparent");
+                }}
+              >
+                <TransparentIcon />
+                <span>
+                  พื้นหลังโปร่งใส
+                  <span className="menu-sub">PNG โปร่งใส นำไปซ้อนที่อื่นได้</span>
                 </span>
               </button>
             </div>

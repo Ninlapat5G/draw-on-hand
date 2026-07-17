@@ -1,4 +1,20 @@
-export type BrushStyle = "pen" | "neon" | "marker" | "rainbow" | "eraser";
+export type BrushStyle =
+  | "pen"
+  | "calligraphy"
+  | "neon"
+  | "marker"
+  | "rainbow"
+  | "dotted"
+  | "spray"
+  | "laser"
+  | "line"
+  | "arrow"
+  | "rect"
+  | "ellipse"
+  | "eraser";
+
+/** Canvas-wide symmetry applied to strokes at creation time. */
+export type SymmetryMode = "off" | "mirror" | "kaleido";
 
 export interface Tool {
   style: BrushStyle;
@@ -18,6 +34,8 @@ export interface Stroke {
   color: string;
   size: number;
   points: StrokePoint[];
+  /** symmetry captured when the stroke was drawn ("off" is stored as undefined) */
+  sym?: Exclude<SymmetryMode, "off">;
 }
 
 export type AppStatus =

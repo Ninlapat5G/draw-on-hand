@@ -2,12 +2,20 @@ import type { CSSProperties } from "react";
 import type { BrushStyle, Tool } from "../types";
 import { usePointerDrag } from "../lib/useDrag";
 import {
+  ArrowIcon,
+  CalligraphyIcon,
+  CircleIcon,
   CloseIcon,
+  DottedIcon,
   EraserIcon,
+  LaserIcon,
+  LineIcon,
   MarkerIcon,
   NeonIcon,
   PenIcon,
   RainbowIcon,
+  SprayIcon,
+  SquareIcon,
 } from "./icons";
 
 const PRESET_COLORS = [
@@ -24,15 +32,28 @@ const PRESET_COLORS = [
 const SIZES = [4, 8, 12, 18, 26, 34];
 
 const BRUSHES: { style: BrushStyle; label: string; icon: () => JSX.Element }[] = [
-  { style: "pen", label: "Pen", icon: PenIcon },
-  { style: "neon", label: "Neon", icon: NeonIcon },
-  { style: "marker", label: "Marker", icon: MarkerIcon },
-  { style: "rainbow", label: "Rainbow", icon: RainbowIcon },
-  { style: "eraser", label: "Eraser", icon: EraserIcon },
+  { style: "pen", label: "ปากกา", icon: PenIcon },
+  { style: "calligraphy", label: "พู่กันหมึก", icon: CalligraphyIcon },
+  { style: "neon", label: "นีออน", icon: NeonIcon },
+  { style: "marker", label: "มาร์กเกอร์", icon: MarkerIcon },
+  { style: "rainbow", label: "สายรุ้ง", icon: RainbowIcon },
+  { style: "dotted", label: "จุดไข่ปลา", icon: DottedIcon },
+  { style: "spray", label: "สเปรย์", icon: SprayIcon },
+  { style: "eraser", label: "ยางลบ", icon: EraserIcon },
+];
+
+/** Middle ring: perfect shapes drawn corner-to-corner, plus the laser. */
+const SHAPES: { style: BrushStyle; label: string; icon: () => JSX.Element }[] = [
+  { style: "line", label: "เส้นตรง", icon: LineIcon },
+  { style: "arrow", label: "ลูกศร", icon: ArrowIcon },
+  { style: "rect", label: "สี่เหลี่ยม", icon: SquareIcon },
+  { style: "ellipse", label: "วงรี", icon: CircleIcon },
+  { style: "laser", label: "เลเซอร์พอยเตอร์", icon: LaserIcon },
 ];
 
 const INNER_R = 76;
-const OUTER_R = 136;
+const MIDDLE_R = 122;
+const OUTER_R = 168;
 
 /** Position an item on its ring; --tx/--ty and a stagger delay drive the
  * expand/collapse animation in CSS. */
@@ -81,6 +102,8 @@ export function RadialDock({
 
   // Outer ring: 8 colors + custom picker + 6 sizes = 15 items, evenly spaced.
   const outerStep = 360 / (PRESET_COLORS.length + 1 + SIZES.length);
+  const middleStep = 360 / SHAPES.length;
+  const outerOrderBase = BRUSHES.length + SHAPES.length;
 
   return (
     <div
@@ -91,6 +114,10 @@ export function RadialDock({
       <div
         className="dock-ring"
         style={{ width: INNER_R * 2, height: INNER_R * 2 }}
+      />
+      <div
+        className="dock-ring"
+        style={{ width: MIDDLE_R * 2, height: MIDDLE_R * 2 }}
       />
       <div
         className="dock-ring"
@@ -107,7 +134,25 @@ export function RadialDock({
           <button
             className={`dock-btn${tool.style === style ? " active" : ""}`}
             title={label}
-            aria-label={`Brush: ${label}`}
+            aria-label={`แปรง: ${label}`}
+            onClick={() => onChange({ ...tool, style })}
+          >
+            <Icon />
+          </button>
+        </div>
+      ))}
+
+      {/* Middle ring: shape tools + laser pointer */}
+      {SHAPES.map(({ style, label, icon: Icon }, i) => (
+        <div
+          key={style}
+          className="dock-item"
+          style={ringStyle(-90 + i * middleStep, MIDDLE_R, BRUSHES.length + i)}
+        >
+          <button
+            className={`dock-btn shape${tool.style === style ? " active" : ""}`}
+            title={label}
+            aria-label={`เครื่องมือ: ${label}`}
             onClick={() => onChange({ ...tool, style })}
           >
             <Icon />
@@ -120,12 +165,12 @@ export function RadialDock({
         <div
           key={c}
           className="dock-item"
-          style={ringStyle(-90 + i * outerStep, OUTER_R, BRUSHES.length + i)}
+          style={ringStyle(-90 + i * outerStep, OUTER_R, outerOrderBase + i)}
         >
           <button
             className={`swatch${tool.color === c ? " active" : ""}`}
             style={{ background: c, "--swatch-glow": c } as CSSProperties}
-            aria-label={`Color ${c}`}
+            aria-label={`สี ${c}`}
             onClick={() => onChange({ ...tool, color: c })}
           />
         </div>
@@ -136,12 +181,12 @@ export function RadialDock({
         style={ringStyle(
           -90 + PRESET_COLORS.length * outerStep,
           OUTER_R,
-          BRUSHES.length + PRESET_COLORS.length,
+          outerOrderBase + PRESET_COLORS.length,
         )}
       >
         <label
           className={`swatch-custom${!isPreset ? " active" : ""}`}
-          title="Custom color"
+          title="เลือกสีเอง"
         >
           <span
             className="inner"
@@ -162,13 +207,13 @@ export function RadialDock({
           style={ringStyle(
             -90 + (PRESET_COLORS.length + 1 + i) * outerStep,
             OUTER_R,
-            BRUSHES.length + PRESET_COLORS.length + 1 + i,
+            outerOrderBase + PRESET_COLORS.length + 1 + i,
           )}
         >
           <button
             className={`size-btn${tool.size === s ? " active" : ""}`}
-            title={`Size ${s}px`}
-            aria-label={`Brush size ${s} pixels`}
+            title={`ขนาดเส้น ${s}px`}
+            aria-label={`ขนาดเส้น ${s} พิกเซล`}
             onClick={() => onChange({ ...tool, size: s })}
           >
             <span

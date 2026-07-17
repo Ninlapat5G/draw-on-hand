@@ -50,6 +50,95 @@ export const EraserIcon = () => (
   </svg>
 );
 
+export const CalligraphyIcon = () => (
+  <svg {...base()}>
+    <path d="M4 20c4-1 5-3 6-6s2-6 5-9l4 4c-3 3-6 4-9 5s-5 2-6 6z" />
+    <path d="M15 5l4 4" />
+  </svg>
+);
+
+export const DottedIcon = () => (
+  <svg {...base({ strokeWidth: 2.6 })}>
+    <path d="M4 20h.01M8.5 15.5h.01M13 11h.01M17.5 6.5h.01M21 3h.01" />
+  </svg>
+);
+
+export const SprayIcon = () => (
+  <svg {...base()}>
+    <path d="M9 8h6l1 13H8L9 8z" />
+    <path d="M10 8V5h4v3" />
+    <path d="M12 2v1M17 3l-.7.7M19 7h-1M5 7h1M7 3l.7.7" />
+  </svg>
+);
+
+export const LaserIcon = () => (
+  <svg {...base()}>
+    <path d="M3 21l9-9" />
+    <circle cx="14.5" cy="9.5" r="2" />
+    <path d="M14.5 4.5v-2M19 5l1.4-1.4M19.5 9.5h2M19 14l1.4 1.4M14.5 14.5v2M10 5L8.6 3.6" />
+  </svg>
+);
+
+export const LineIcon = () => (
+  <svg {...base()}>
+    <path d="M5 19L19 5" />
+    <circle cx="5" cy="19" r="1.4" />
+    <circle cx="19" cy="5" r="1.4" />
+  </svg>
+);
+
+export const ArrowIcon = () => (
+  <svg {...base()}>
+    <path d="M5 19L19 5" />
+    <path d="M10 5h9v9" />
+  </svg>
+);
+
+export const SquareIcon = () => (
+  <svg {...base()}>
+    <rect x="4" y="4" width="16" height="16" rx="1.5" />
+  </svg>
+);
+
+export const CircleIcon = () => (
+  <svg {...base()}>
+    <circle cx="12" cy="12" r="8.5" />
+  </svg>
+);
+
+export const PlayIcon = () => (
+  <svg {...base()}>
+    <path d="M6 4l14 8-14 8V4z" />
+  </svg>
+);
+
+export const MirrorIcon = () => (
+  <svg {...base()}>
+    <path d="M12 2v20" strokeDasharray="3 3" />
+    <path d="M8 7L4 12l4 5" />
+    <path d="M16 7l4 5-4 5" />
+  </svg>
+);
+
+export const KaleidoIcon = () => (
+  <svg {...base()}>
+    <circle cx="12" cy="12" r="2.4" />
+    <path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4" />
+    <path d="M5.3 5.3l2.8 2.8M15.9 15.9l2.8 2.8M18.7 5.3l-2.8 2.8M8.1 15.9l-2.8 2.8" />
+  </svg>
+);
+
+export const TransparentIcon = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor" stroke="none">
+    <rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke="currentColor" strokeWidth="2" />
+    <rect x="6" y="6" width="4" height="4" opacity="0.85" />
+    <rect x="14" y="6" width="4" height="4" opacity="0.35" />
+    <rect x="10" y="10" width="4" height="4" opacity="0.6" />
+    <rect x="6" y="14" width="4" height="4" opacity="0.35" />
+    <rect x="14" y="14" width="4" height="4" opacity="0.85" />
+  </svg>
+);
+
 export const UndoIcon = () => (
   <svg {...base()}>
     <path d="M3 7v6h6" />

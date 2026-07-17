@@ -6,7 +6,7 @@ import { TopBar } from "./components/TopBar";
 import { MaskWidget } from "./components/MaskWidget";
 import { Toasts, type ToastItem, type ToastKind } from "./components/Toasts";
 import { AlertIcon } from "./components/icons";
-import { savePng } from "./lib/capture";
+import { savePng, type SaveMode } from "./lib/capture";
 import {
   DEFAULT_PINCH_RATIO,
   GestureEngine,
@@ -29,11 +29,34 @@ import {
   type FaceTransform,
 } from "./lib/faceTracking";
 import { drawStroke, eraseSegment } from "./lib/strokes";
-import type { AppStatus, Stroke, Tool, MaskLayer, MaskStroke } from "./types";
+import type {
+  AppStatus,
+  Stroke,
+  SymmetryMode,
+  Tool,
+  MaskLayer,
+  MaskStroke,
+} from "./types";
 
 const DEFAULT_TOOL: Tool = { style: "pen", color: "#22d3ee", size: 10 };
 const PINCH_STORAGE_KEY = "draw-on-hand.pinchRatio";
 const ONBOARD_STORAGE_KEY = "draw-on-hand.onboarded";
+const ARTWORK_STORAGE_KEY = "draw-on-hand.artwork";
+const MASKS_STORAGE_KEY = "draw-on-hand.masks";
+
+/** How long a laser-pointer trail stays on screen (ms). */
+const LASER_TTL = 750;
+
+function loadSavedMasks(): MaskLayer[] {
+  try {
+    const raw = localStorage.getItem(MASKS_STORAGE_KEY);
+    if (!raw) return [];
+    const data = JSON.parse(raw);
+    return Array.isArray(data) ? (data as MaskLayer[]) : [];
+  } catch {
+    return [];
+  }
+}
 
 /** Which handle of the mask-definition box an interaction targets. */
 type DefEditMode =
@@ -58,6 +81,8 @@ interface HandState {
    * pinch grabs the intended target even though closing the pinch shifts the
    * fingertip position off it. */
   hoverHandle: DefEditMode;
+  /** fading laser-pointer trail (never committed as a stroke) */
+  laser: { x: number; y: number; t: number }[];
 }
 
 function loadPinchRatio(): number {
@@ -86,6 +111,11 @@ export default function App() {
   const hasDrawnRef = useRef(false);
 
   const [tool, setTool] = useState<Tool>(DEFAULT_TOOL);
+  const [symmetry, setSymmetry] = useState<SymmetryMode>("off");
+  const symmetryRef = useRef<SymmetryMode>("off");
+  useEffect(() => {
+    symmetryRef.current = symmetry;
+  }, [symmetry]);
   const [status, setStatus] = useState<AppStatus>("loading-model");
   const [handPresent, setHandPresent] = useState(false);
   const [strokeCount, setStrokeCount] = useState(0);
@@ -118,7 +148,7 @@ export default function App() {
   );
   const actionsRef = useRef<HTMLDivElement>(null);
 
-  const [masks, setMasks] = useState<MaskLayer[]>([]);
+  const [masks, setMasks] = useState<MaskLayer[]>(loadSavedMasks);
   const [selectedMaskId, setSelectedMaskId] = useState<string | null>(null);
   const [maskWidgetOpen, setMaskWidgetOpen] = useState(false);
   const [maskWidgetPos, setMaskWidgetPos] = useState<{ x: number; y: number } | null>(null);
@@ -750,7 +780,9 @@ export default function App() {
               : pinching
                 ? t.style === "eraser"
                   ? "ERASING"
-                  : "DRAWING"
+                  : t.style === "laser"
+                    ? "LASER"
+                    : "DRAWING"
                 : "";
       if (label) {
         ctx.save();
@@ -786,6 +818,24 @@ export default function App() {
       const w = live.clientWidth;
       const h = live.clientHeight;
       lctx.clearRect(0, 0, w, h);
+
+      // Symmetry guide axes so the user can see where reflections land.
+      const symNow = symmetryRef.current;
+      if (symNow !== "off") {
+        lctx.save();
+        lctx.strokeStyle = "rgba(255, 255, 255, 0.16)";
+        lctx.lineWidth = 1;
+        lctx.setLineDash([6, 8]);
+        lctx.beginPath();
+        lctx.moveTo(w / 2, 0);
+        lctx.lineTo(w / 2, h);
+        if (symNow === "kaleido") {
+          lctx.moveTo(0, h / 2);
+          lctx.lineTo(w, h / 2);
+        }
+        lctx.stroke();
+        lctx.restore();
+      }
 
       // 1. Process Face Tracking & Render AR Masks
       let faceTransform: FaceTransform | null = null;
@@ -1048,6 +1098,7 @@ export default function App() {
             pinchFromUi: false,
             pinchFromCanvas: false,
             hoverHandle: "idle",
+            laser: [],
           };
           handsRef.current.set(key, state);
         }
@@ -1383,14 +1434,24 @@ export default function App() {
 
         const blocked = handUiState.overUi || f.state.pinchFromUi || maskIntercept || defIntercept;
 
-        if (f.hand.pinching && !blocked) {
+        if (f.hand.pinching && !blocked && handStyle === "laser") {
+          // Laser pointer: a fading trail on the live layer only — nothing
+          // is ever committed, so it's safe for presentations over artwork.
+          f.state.laser.push({ x: f.pt.x, y: f.pt.y, t: timestamp });
+          if (!hasDrawnRef.current) {
+            hasDrawnRef.current = true;
+            setHasDrawn(true);
+          }
+        } else if (f.hand.pinching && !blocked) {
           let stroke = f.state.stroke;
           if (!stroke) {
+            const sym = symmetryRef.current;
             stroke = {
               style: handStyle,
               color: handColor,
               size: t.size,
               points: [],
+              ...(sym !== "off" ? { sym } : {}),
             };
             f.state.stroke = stroke;
           }
@@ -1437,6 +1498,31 @@ export default function App() {
           f.hand.pinching,
           f.hand.pinchStrength,
         );
+      }
+
+      // Fading laser-pointer trails (keep fading after the pinch releases).
+      for (const state of handsRef.current.values()) {
+        if (state.laser.length === 0) continue;
+        state.laser = state.laser.filter((p) => timestamp - p.t < LASER_TTL);
+        if (state.laser.length < 2) continue;
+        lctx.save();
+        lctx.lineCap = "round";
+        lctx.lineJoin = "round";
+        lctx.shadowColor = t.color;
+        lctx.shadowBlur = 14;
+        for (let i = 1; i < state.laser.length; i++) {
+          const a = state.laser[i - 1];
+          const b = state.laser[i];
+          const alpha = Math.max(0, 1 - (timestamp - b.t) / LASER_TTL);
+          lctx.globalAlpha = alpha;
+          lctx.strokeStyle = t.color;
+          lctx.lineWidth = Math.max(2, t.size * 0.7) * (0.35 + 0.65 * alpha);
+          lctx.beginPath();
+          lctx.moveTo(a.x, a.y);
+          lctx.lineTo(b.x, b.y);
+          lctx.stroke();
+        }
+        lctx.restore();
       }
 
       // Publish this frame's handle hover for the next overlay draw.
@@ -1534,7 +1620,123 @@ export default function App() {
     });
   }, [replay, showToast]);
 
-  const handleSave = useCallback((includeCamera: boolean) => {
+  const cycleSymmetry = useCallback(() => {
+    setSymmetry((s) => {
+      const next: SymmetryMode =
+        s === "off" ? "mirror" : s === "mirror" ? "kaleido" : "off";
+      showToast(
+        next === "off"
+          ? "ปิดโหมดสมมาตร"
+          : next === "mirror"
+            ? "โหมดกระจก: เส้นจะสะท้อนซ้าย–ขวาอัตโนมัติ"
+            : "โหมดคาไลโดสโคป: เส้นจะหมุนซ้ำ 4 ทิศรอบกลางจอ",
+        { duration: 2200 },
+      );
+      return next;
+    });
+  }, [showToast]);
+
+  const replayAnimRef = useRef(0);
+
+  /** Re-draws the artwork stroke-by-stroke as a short animation. */
+  const replayAnimation = useCallback(() => {
+    const base = baseRef.current;
+    const ctx = base?.getContext("2d");
+    if (!base || !ctx) return;
+    const strokes = [...strokesRef.current];
+    if (strokes.length === 0) return;
+    cancelAnimationFrame(replayAnimRef.current);
+
+    const w = base.clientWidth;
+    const h = base.clientHeight;
+    const counts = strokes.map((s) => Math.max(1, s.points.length));
+    const total = counts.reduce((a, b) => a + b, 0);
+    const duration = Math.min(6000, Math.max(1600, total * 6));
+    const start = performance.now();
+
+    const step = (now: number) => {
+      const p = Math.min(1, (now - start) / duration);
+      let budget = Math.max(1, Math.floor(total * p));
+      ctx.clearRect(0, 0, w, h);
+      for (let i = 0; i < strokes.length && budget > 0; i++) {
+        const s = strokes[i];
+        const n = counts[i];
+        if (budget >= n) {
+          drawStroke(ctx, s, w, h);
+          budget -= n;
+        } else {
+          drawStroke(ctx, { ...s, points: s.points.slice(0, budget) }, w, h);
+          budget = 0;
+        }
+      }
+      if (p < 1) {
+        replayAnimRef.current = requestAnimationFrame(step);
+      } else {
+        // Final exact redraw (also restores strokes committed mid-animation).
+        replay();
+      }
+    };
+    replayAnimRef.current = requestAnimationFrame(step);
+  }, [replay]);
+
+  // Autosave the artwork (debounced) so a refresh never loses work.
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      try {
+        if (strokesRef.current.length === 0) {
+          localStorage.removeItem(ARTWORK_STORAGE_KEY);
+        } else {
+          localStorage.setItem(
+            ARTWORK_STORAGE_KEY,
+            JSON.stringify(strokesRef.current),
+          );
+        }
+      } catch {
+        // Storage full or unavailable — autosave is best-effort.
+      }
+    }, 600);
+    return () => window.clearTimeout(id);
+  }, [strokeCount]);
+
+  // Persist face masks the same way.
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      try {
+        if (masks.length === 0) {
+          localStorage.removeItem(MASKS_STORAGE_KEY);
+        } else {
+          localStorage.setItem(MASKS_STORAGE_KEY, JSON.stringify(masks));
+        }
+      } catch {
+        // best-effort
+      }
+    }, 600);
+    return () => window.clearTimeout(id);
+  }, [masks]);
+
+  // Restore the previous session's artwork once on startup.
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    try {
+      const raw = localStorage.getItem(ARTWORK_STORAGE_KEY);
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      if (!Array.isArray(data) || data.length === 0) return;
+      strokesRef.current = data as Stroke[];
+      setStrokeCount(data.length);
+      requestAnimationFrame(() => replay());
+      showToast("กู้คืนผลงานจากครั้งก่อนแล้ว", {
+        actionLabel: "เริ่มใหม่",
+        onAction: clearAll,
+      });
+    } catch {
+      // Corrupt saved data — start fresh.
+    }
+  }, [replay, showToast, clearAll]);
+
+  const handleSave = useCallback((mode: SaveMode) => {
     const base = baseRef.current;
     if (!base) return;
     const ctx = base.getContext("2d");
@@ -1566,7 +1768,7 @@ export default function App() {
       }
     }
 
-    savePng(base, videoRef.current, includeCamera);
+    savePng(base, videoRef.current, mode);
     setFlashKey((k) => k + 1);
 
     // Replay to clear the temporary masks off the base canvas
@@ -1758,6 +1960,9 @@ export default function App() {
         onClear={clearAll}
         onToggleCamera={() => setCameraVisible((v) => !v)}
         onSave={handleSave}
+        symmetry={symmetry}
+        onCycleSymmetry={cycleSymmetry}
+        onReplayAnimation={replayAnimation}
         drawingHand={drawingHand}
         onDrawingHandChange={handleDrawingHandChange}
         onCreateMask={startMaskDefinition}

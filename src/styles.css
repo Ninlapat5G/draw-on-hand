@@ -298,7 +298,7 @@ button {
   display: flex;
   align-items: center;
   gap: 2px;
-  max-width: 340px;
+  max-width: 560px;
   overflow: hidden;
   opacity: 1;
   transition:
@@ -584,6 +584,17 @@ input[type="range"].settings-slider::-moz-range-thumb {
 .dock-btn svg {
   width: 19px;
   height: 19px;
+}
+
+/* Middle-ring tools are a touch smaller so the three rings breathe. */
+.dock-btn.shape {
+  width: 42px;
+  height: 42px;
+}
+
+.dock-btn.shape svg {
+  width: 17px;
+  height: 17px;
 }
 
 .dock-btn:hover,
