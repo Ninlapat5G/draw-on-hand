@@ -36,6 +36,31 @@ vercel
 
 > หมายเหตุ: การเข้าใช้งานกล้องบนเบราว์เซอร์จำเป็นต้องผ่านโปรโตคอล HTTPS ซึ่งระบบของ Vercel จะมีให้อยู่แล้วเป็นค่าเริ่มต้น
 
+## โครงสร้างโปรเจกต์ (Project Structure)
+
+```
+src/
+  main.tsx              จุดเริ่มต้นแอป
+  App.tsx               จัดการ state และวงจรเฟรมหลัก (orchestration เท่านั้น)
+  types.ts              Type กลางทั้งหมด (Stroke, Tool, MaskLayer, ...)
+  styles.css            Design tokens + สไตล์ทั้งแอป
+  components/           UI ล้วน: TopBar, ActionsPanel, RadialDock,
+                        MaskWidget, Toasts, Onboarding, StatusOverlays, icons
+  lib/
+    tracking.ts         HandLandmarker + กล้อง + การแปลงพิกัด
+    faceTracking.ts     FaceLandmarker + คณิตพิกัดสัมพัทธ์ใบหน้า
+    gestures.ts         เอนจินตรวจจับการจีบนิ้ว (hysteresis + debounce)
+    handUi.ts           ควบคุม UI ด้วยปลายนิ้ว (hover/click/drag/slider)
+    strokes.ts          เรนเดอร์แปรงทุกชนิด + ระบบสมมาตร
+    overlays.ts         เรนเดอร์ overlay บนเลเยอร์สด (ไกด์/หน้ากาก/เลเซอร์)
+    cursor.ts           เคอร์เซอร์ปลายนิ้ว + ป้ายสถานะ
+    maskDefBox.ts       เรขาคณิตกล่องกำหนดขอบเขตหน้ากาก (ใช้ร่วมเมาส์/มือ)
+    skeleton.ts         โครงกระดูกมือ
+    capture.ts          บันทึกภาพ PNG 3 โหมด
+    storage.ts          localStorage ทั้งหมด (คีย์ + safe load/save)
+    useDrag.ts          hook ลากแผงด้วยเมาส์
+```
+
 ## เทคโนโลยีหลัก (Tech Stack)
 
 - React 18 + TypeScript + Vite

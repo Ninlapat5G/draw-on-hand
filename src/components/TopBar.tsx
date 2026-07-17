@@ -4,6 +4,8 @@ import { SparkleIcon } from "./icons";
 interface TopBarProps {
   status: AppStatus;
   handPresent: boolean;
+  /** measured tracking frame rate; 0 = not measured yet */
+  fps: number;
 }
 
 function statusText(status: AppStatus, handPresent: boolean): string {
@@ -21,7 +23,7 @@ function statusText(status: AppStatus, handPresent: boolean): string {
   }
 }
 
-export function TopBar({ status, handPresent }: TopBarProps) {
+export function TopBar({ status, handPresent, fps }: TopBarProps) {
   const dotClass =
     status === "ready" && handPresent
       ? "status-dot on"
@@ -41,9 +43,16 @@ export function TopBar({ status, handPresent }: TopBarProps) {
         </div>
       </div>
 
-      <div className="status-pill glass">
-        <span className={dotClass} />
-        {statusText(status, handPresent)}
+      <div className="topbar-right">
+        {status === "ready" && fps > 0 && (
+          <div className="fps-pill glass" title="อัตราเฟรมของระบบติดตาม">
+            <span className="fps-value">{fps}</span> FPS
+          </div>
+        )}
+        <div className="status-pill glass">
+          <span className={dotClass} />
+          {statusText(status, handPresent)}
+        </div>
       </div>
     </header>
   );

@@ -4,18 +4,46 @@ import { ActionsPanel } from "./components/ActionsPanel";
 import { RadialDock } from "./components/RadialDock";
 import { TopBar } from "./components/TopBar";
 import { MaskWidget } from "./components/MaskWidget";
+import { Onboarding } from "./components/Onboarding";
+import { StatusOverlays } from "./components/StatusOverlays";
 import { Toasts, type ToastItem, type ToastKind } from "./components/Toasts";
-import { AlertIcon } from "./components/icons";
 import { savePng, type SaveMode } from "./lib/capture";
+import { drawCursor } from "./lib/cursor";
 import {
-  DEFAULT_PINCH_RATIO,
   GestureEngine,
   MAX_PINCH_RATIO,
   MIN_PINCH_RATIO,
   type PinchConfig,
 } from "./lib/gestures";
 import { HandUiController, isOverUi, type UiState } from "./lib/handUi";
+import {
+  applyDefEdit,
+  pickDefHandle,
+  snapshotDefEdit,
+  type DefEditMode,
+  type MaskDefBox,
+} from "./lib/maskDefBox";
+import {
+  drawDefOverlay,
+  drawLaserTrail,
+  drawMaskLayer,
+  drawNoseDot,
+  drawSelectedMaskBox,
+  drawSymmetryGuides,
+  type LaserPoint,
+} from "./lib/overlays";
 import { drawHandSkeleton } from "./lib/skeleton";
+import {
+  loadDrawingHand,
+  loadPinchRatio,
+  loadSavedMasks,
+  loadSavedStrokes,
+  loadString,
+  removeStored,
+  saveJson,
+  saveString,
+  STORAGE_KEYS,
+} from "./lib/storage";
 import {
   createHandLandmarker,
   startCamera,
@@ -24,8 +52,8 @@ import {
 import {
   createFaceLandmarker,
   getFaceTransform,
-  faceRelativeToCanvas,
-  getMaskBounds,
+  getMaskHandles,
+  screenDeltaToFaceDelta,
   type FaceTransform,
 } from "./lib/faceTracking";
 import { drawStroke, eraseSegment } from "./lib/strokes";
@@ -39,34 +67,9 @@ import type {
 } from "./types";
 
 const DEFAULT_TOOL: Tool = { style: "pen", color: "#22d3ee", size: 10 };
-const PINCH_STORAGE_KEY = "draw-on-hand.pinchRatio";
-const ONBOARD_STORAGE_KEY = "draw-on-hand.onboarded";
-const ARTWORK_STORAGE_KEY = "draw-on-hand.artwork";
-const MASKS_STORAGE_KEY = "draw-on-hand.masks";
 
 /** How long a laser-pointer trail stays on screen (ms). */
 const LASER_TTL = 750;
-
-function loadSavedMasks(): MaskLayer[] {
-  try {
-    const raw = localStorage.getItem(MASKS_STORAGE_KEY);
-    if (!raw) return [];
-    const data = JSON.parse(raw);
-    return Array.isArray(data) ? (data as MaskLayer[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-/** Which handle of the mask-definition box an interaction targets. */
-type DefEditMode =
-  | "idle"
-  | "move-box"
-  | "move-anchor"
-  | "resize-tl"
-  | "resize-tr"
-  | "resize-bl"
-  | "resize-br";
 
 /** Per-hand tracking state so both hands can draw independently. */
 interface HandState {
@@ -82,15 +85,7 @@ interface HandState {
    * fingertip position off it. */
   hoverHandle: DefEditMode;
   /** fading laser-pointer trail (never committed as a stroke) */
-  laser: { x: number; y: number; t: number }[];
-}
-
-function loadPinchRatio(): number {
-  const stored = localStorage.getItem(PINCH_STORAGE_KEY);
-  if (stored === null) return DEFAULT_PINCH_RATIO;
-  const raw = Number(stored);
-  if (!Number.isFinite(raw)) return DEFAULT_PINCH_RATIO;
-  return Math.min(MAX_PINCH_RATIO, Math.max(MIN_PINCH_RATIO, raw));
+  laser: LaserPoint[];
 }
 
 export default function App() {
@@ -123,17 +118,17 @@ export default function App() {
   const [hasDrawn, setHasDrawn] = useState(false);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [onboardingOpen, setOnboardingOpen] = useState(
-    () => localStorage.getItem(ONBOARD_STORAGE_KEY) !== "1",
+    () => loadString(STORAGE_KEYS.onboarded) !== "1",
   );
   const [cameraVisible, setCameraVisible] = useState(true);
   const [flashKey, setFlashKey] = useState(0);
+  const [fps, setFps] = useState(0);
   const [pinchRatio, setPinchRatio] = useState(
     pinchConfigRef.current.ratioStart,
   );
-  const [drawingHand, setDrawingHand] = useState<"Left" | "Right">(() => {
-    const stored = localStorage.getItem("draw-on-hand.drawingHand");
-    return stored === "Left" || stored === "Right" ? stored : "Right";
-  });
+  const [drawingHand, setDrawingHand] = useState<"Left" | "Right">(
+    loadDrawingHand,
+  );
 
 
   // Floating panels: the radial dock (anchored by its center point) and the
@@ -153,15 +148,12 @@ export default function App() {
   const [maskWidgetOpen, setMaskWidgetOpen] = useState(false);
   const [maskWidgetPos, setMaskWidgetPos] = useState<{ x: number; y: number } | null>(null);
 
-  const [maskDefinition, setMaskDefinition] = useState<{
-    active: boolean;
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-    anchorX: number;
-    anchorY: number;
-  }>({
+  const maskWidgetOpenRef = useRef(false);
+  useEffect(() => {
+    maskWidgetOpenRef.current = maskWidgetOpen;
+  }, [maskWidgetOpen]);
+
+  const [maskDefinition, setMaskDefinition] = useState<MaskDefBox>({
     active: false,
     x: 0.5,
     y: 0.5,
@@ -176,18 +168,13 @@ export default function App() {
     maskDefinitionRef.current = maskDefinition;
   }, [maskDefinition]);
 
-  const defEditStateRef = useRef<{
-    mode: DefEditMode;
-    activeHandKey: string | null;
-    startX: number;
-    startY: number;
-    startBoxX: number;
-    startBoxY: number;
-    startBoxW: number;
-    startBoxH: number;
-    startAnchorX: number;
-    startAnchorY: number;
-  }>({
+  const defEditStateRef = useRef<
+    ReturnType<typeof snapshotDefEdit> & {
+      activeHandKey: string | null;
+      startX: number;
+      startY: number;
+    }
+  >({
     mode: "idle",
     activeHandKey: null,
     startX: 0,
@@ -296,7 +283,7 @@ export default function App() {
 
   const dismissOnboarding = useCallback(() => {
     setOnboardingOpen(false);
-    localStorage.setItem(ONBOARD_STORAGE_KEY, "1");
+    saveString(STORAGE_KEYS.onboarded, "1");
   }, []);
 
   const handleSelectMask = useCallback((id: string | null) => {
@@ -326,139 +313,51 @@ export default function App() {
     const w = rect.width;
     const h = rect.height;
 
-    if (maskDefinition.active) {
-      // Click handles for Mask Definition Box
-      const x1 = (maskDefinition.x - maskDefinition.width / 2) * w;
-      const x2 = (maskDefinition.x + maskDefinition.width / 2) * w;
-      const y1 = (maskDefinition.y - maskDefinition.height / 2) * h;
-      const y2 = (maskDefinition.y + maskDefinition.height / 2) * h;
-
-      const ax = maskDefinition.anchorX * w;
-      const ay = maskDefinition.anchorY * h;
-
-      const cx = maskDefinition.x * w;
-      const cy = maskDefinition.y * h;
-
-      const dist = (px: number, py: number) => Math.hypot(clickX - px, clickY - py);
-
-      let mode: typeof defEditStateRef.current.mode = "idle";
-      if (dist(ax, ay) < 25) {
-        mode = "move-anchor";
-      } else if (dist(cx, cy) < 25) {
-        mode = "move-box";
-      } else if (dist(x1, y1) < 25) {
-        mode = "resize-tl";
-      } else if (dist(x2, y1) < 25) {
-        mode = "resize-tr";
-      } else if (dist(x1, y2) < 25) {
-        mode = "resize-bl";
-      } else if (dist(x2, y2) < 25) {
-        mode = "resize-br";
-      }
-
-      if (mode === "idle") return;
-
+    const beginDrag = (
+      onMove: (evt: PointerEvent) => void,
+      onEnd: () => void,
+    ) => {
       e.preventDefault();
       e.currentTarget.setPointerCapture(e.pointerId);
+      const target = e.currentTarget;
+      const pointerId = e.pointerId;
+      const handleUp = () => {
+        try {
+          target.releasePointerCapture(pointerId);
+        } catch {
+          // pointer already released
+        }
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", handleUp);
+        onEnd();
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", handleUp);
+    };
+
+    if (maskDefinition.active) {
+      const mode = pickDefHandle(clickX, clickY, maskDefinition, w, h, 25);
+      if (mode === "idle") return;
 
       defEditStateRef.current = {
-        mode,
+        ...snapshotDefEdit(mode, maskDefinition),
         activeHandKey: null,
         startX: clickX,
         startY: clickY,
-        startBoxX: maskDefinition.x,
-        startBoxY: maskDefinition.y,
-        startBoxW: maskDefinition.width,
-        startBoxH: maskDefinition.height,
-        startAnchorX: maskDefinition.anchorX,
-        startAnchorY: maskDefinition.anchorY,
       };
 
-      const handlePointerMove = (moveEvt: PointerEvent) => {
-        const curX = moveEvt.clientX - rect.left;
-        const curY = moveEvt.clientY - rect.top;
-        const dx = (curX - defEditStateRef.current.startX) / w;
-        const dy = (curY - defEditStateRef.current.startY) / h;
-
-        const edit = defEditStateRef.current;
-        if (edit.mode === "move-anchor") {
-          const newAx = Math.min(1, Math.max(0, edit.startAnchorX + dx));
-          const newAy = Math.min(1, Math.max(0, edit.startAnchorY + dy));
-          setMaskDefinition((d) => ({ ...d, anchorX: newAx, anchorY: newAy }));
-        } else if (edit.mode === "move-box") {
-          const newCx = Math.min(1, Math.max(0, edit.startBoxX + dx));
-          const newCy = Math.min(1, Math.max(0, edit.startBoxY + dy));
-          const deltaX = newCx - edit.startBoxX;
-          const deltaY = newCy - edit.startBoxY;
-          setMaskDefinition((d) => ({
-            ...d,
-            x: newCx,
-            y: newCy,
-            anchorX: Math.min(1, Math.max(0, edit.startAnchorX + deltaX)),
-            anchorY: Math.min(1, Math.max(0, edit.startAnchorY + deltaY)),
-          }));
-        } else if (edit.mode === "resize-br") {
-          const right = Math.min(1, Math.max(edit.startBoxX - edit.startBoxW / 2 + 0.05, edit.startBoxX + edit.startBoxW / 2 + dx));
-          const bottom = Math.min(1, Math.max(edit.startBoxY - edit.startBoxH / 2 + 0.05, edit.startBoxY + edit.startBoxH / 2 + dy));
-          const left = edit.startBoxX - edit.startBoxW / 2;
-          const top = edit.startBoxY - edit.startBoxH / 2;
-          setMaskDefinition((d) => ({
-            ...d,
-            x: (left + right) / 2,
-            y: (top + bottom) / 2,
-            width: right - left,
-            height: bottom - top,
-          }));
-        } else if (edit.mode === "resize-tl") {
-          const left = Math.min(edit.startBoxX + edit.startBoxW / 2 - 0.05, Math.max(0, edit.startBoxX - edit.startBoxW / 2 + dx));
-          const top = Math.min(edit.startBoxY + edit.startBoxH / 2 - 0.05, Math.max(0, edit.startBoxY - edit.startBoxH / 2 + dy));
-          const right = edit.startBoxX + edit.startBoxW / 2;
-          const bottom = edit.startBoxY + edit.startBoxH / 2;
-          setMaskDefinition((d) => ({
-            ...d,
-            x: (left + right) / 2,
-            y: (top + bottom) / 2,
-            width: right - left,
-            height: bottom - top,
-          }));
-        } else if (edit.mode === "resize-tr") {
-          const right = Math.min(1, Math.max(edit.startBoxX - edit.startBoxW / 2 + 0.05, edit.startBoxX + edit.startBoxW / 2 + dx));
-          const top = Math.min(edit.startBoxY + edit.startBoxH / 2 - 0.05, Math.max(0, edit.startBoxY - edit.startBoxH / 2 + dy));
-          const left = edit.startBoxX - edit.startBoxW / 2;
-          const bottom = edit.startBoxY + edit.startBoxH / 2;
-          setMaskDefinition((d) => ({
-            ...d,
-            x: (left + right) / 2,
-            y: (top + bottom) / 2,
-            width: right - left,
-            height: bottom - top,
-          }));
-        } else if (edit.mode === "resize-bl") {
-          const left = Math.min(edit.startBoxX + edit.startBoxW / 2 - 0.05, Math.max(0, edit.startBoxX - edit.startBoxW / 2 + dx));
-          const bottom = Math.min(1, Math.max(edit.startBoxY - edit.startBoxH / 2 + 0.05, edit.startBoxY + edit.startBoxH / 2 + dy));
-          const right = edit.startBoxX + edit.startBoxW / 2;
-          const top = edit.startBoxY - edit.startBoxH / 2;
-          setMaskDefinition((d) => ({
-            ...d,
-            x: (left + right) / 2,
-            y: (top + bottom) / 2,
-            width: right - left,
-            height: bottom - top,
-          }));
-        }
-      };
-
-      const handlePointerUp = () => {
-        try {
-          e.currentTarget.releasePointerCapture(e.pointerId);
-        } catch (err) {}
-        window.removeEventListener("pointermove", handlePointerMove);
-        window.removeEventListener("pointerup", handlePointerUp);
-        defEditStateRef.current.mode = "idle";
-      };
-
-      window.addEventListener("pointermove", handlePointerMove);
-      window.addEventListener("pointerup", handlePointerUp);
+      beginDrag(
+        (moveEvt) => {
+          const edit = defEditStateRef.current;
+          const dx = (moveEvt.clientX - rect.left - edit.startX) / w;
+          const dy = (moveEvt.clientY - rect.top - edit.startY) / h;
+          const updates = applyDefEdit(edit, dx, dy);
+          if (updates) setMaskDefinition((d) => ({ ...d, ...updates }));
+        },
+        () => {
+          defEditStateRef.current.mode = "idle";
+        },
+      );
       return;
     }
 
@@ -467,47 +366,15 @@ export default function App() {
     const selectedMask = masks.find((m) => m.id === selectedMaskId);
     if (!selectedMask || !selectedMask.visible) return;
 
-    const bounds = getMaskBounds(selectedMask.strokes);
-    if (!bounds) return;
+    const handles = getMaskHandles(selectedMask, face, w, h);
+    if (!handles) return;
 
+    const distToCenter = Math.hypot(clickX - handles.cx, clickY - handles.cy);
+    const distToScale = Math.hypot(clickX - handles.sx, clickY - handles.sy);
 
-
-    const centerPt = faceRelativeToCanvas(
-      { fx: bounds.centerX, fy: bounds.centerY },
-      face,
-      selectedMask.scale,
-      selectedMask.offsetX,
-      selectedMask.offsetY,
-      selectedMask.mirror,
-    );
-    const scalePt = faceRelativeToCanvas(
-      { fx: bounds.maxFx, fy: bounds.maxFy },
-      face,
-      selectedMask.scale,
-      selectedMask.offsetX,
-      selectedMask.offsetY,
-      selectedMask.mirror,
-    );
-
-    const cx = centerPt.x * w;
-    const cy = centerPt.y * h;
-    const sx = scalePt.x * w;
-    const sy = scalePt.y * h;
-
-    const distToCenter = Math.hypot(clickX - cx, clickY - cy);
-    const distToScale = Math.hypot(clickX - sx, clickY - sy);
-
-    let mode: "idle" | "drag" | "scale" = "idle";
-    if (distToCenter < 35) {
-      mode = "drag";
-    } else if (distToScale < 35) {
-      mode = "scale";
-    }
-
+    const mode: "idle" | "drag" | "scale" =
+      distToCenter < 35 ? "drag" : distToScale < 35 ? "scale" : "idle";
     if (mode === "idle") return;
-
-    e.preventDefault();
-    e.currentTarget.setPointerCapture(e.pointerId);
 
     mouseEditStateRef.current = {
       mode,
@@ -516,67 +383,54 @@ export default function App() {
       startOffsetX: selectedMask.offsetX,
       startOffsetY: selectedMask.offsetY,
       startScale: selectedMask.scale,
-      startDist: Math.hypot(clickX - cx, clickY - cy),
+      startDist: distToCenter,
     };
 
-    const handlePointerMove = (moveEvt: PointerEvent) => {
-      const curX = moveEvt.clientX - rect.left;
-      const curY = moveEvt.clientY - rect.top;
-      const currentFace = lastFaceTransformRef.current;
-      if (!currentFace) return;
+    beginDrag(
+      (moveEvt) => {
+        const curX = moveEvt.clientX - rect.left;
+        const curY = moveEvt.clientY - rect.top;
+        const currentFace = lastFaceTransformRef.current;
+        if (!currentFace) return;
+        const edit = mouseEditStateRef.current;
 
-      if (mouseEditStateRef.current.mode === "drag") {
-        const dx = curX - mouseEditStateRef.current.startHandX;
-        const dy = curY - mouseEditStateRef.current.startHandY;
-
-        const dnx = dx / w;
-        const dny = dy / h;
-        const dfx = dnx / currentFace.scale;
-        const dfy = dny / currentFace.scale;
-
-        const cos = Math.cos(-currentFace.angle);
-        const sin = Math.sin(-currentFace.angle);
-        const rdfx = dfx * cos - dfy * sin;
-        const rdfy = dfx * sin + dfy * cos;
-
-        handleUpdateMask(selectedMask.id, {
-          offsetX: mouseEditStateRef.current.startOffsetX + rdfx,
-          offsetY: mouseEditStateRef.current.startOffsetY + rdfy,
-        });
-      } else if (mouseEditStateRef.current.mode === "scale") {
-        const curDist = Math.hypot(curX - cx, curY - cy);
-        const startDist = mouseEditStateRef.current.startDist;
-        if (startDist > 5) {
-          const ratio = curDist / startDist;
-          const newScale = Math.min(2.5, Math.max(0.3, mouseEditStateRef.current.startScale * ratio));
+        if (edit.mode === "drag") {
+          const { dfx, dfy } = screenDeltaToFaceDelta(
+            curX - edit.startHandX,
+            curY - edit.startHandY,
+            w,
+            h,
+            currentFace,
+          );
+          handleUpdateMask(selectedMask.id, {
+            offsetX: edit.startOffsetX + dfx,
+            offsetY: edit.startOffsetY + dfy,
+          });
+        } else if (edit.mode === "scale" && edit.startDist > 5) {
+          const curDist = Math.hypot(curX - handles.cx, curY - handles.cy);
+          const newScale = Math.min(
+            2.5,
+            Math.max(0.3, edit.startScale * (curDist / edit.startDist)),
+          );
           handleUpdateMask(selectedMask.id, { scale: newScale });
         }
-      }
-    };
-
-    const handlePointerUp = () => {
-      try {
-        e.currentTarget.releasePointerCapture(e.pointerId);
-      } catch (err) {}
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", handlePointerUp);
-      mouseEditStateRef.current.mode = "idle";
-    };
-
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", handlePointerUp);
-  }, [masks, selectedMaskId, handleUpdateMask]);
+      },
+      () => {
+        mouseEditStateRef.current.mode = "idle";
+      },
+    );
+  }, [masks, selectedMaskId, maskDefinition, handleUpdateMask]);
 
   const handleDrawingHandChange = useCallback((hand: "Left" | "Right") => {
     setDrawingHand(hand);
-    localStorage.setItem("draw-on-hand.drawingHand", hand);
+    saveString(STORAGE_KEYS.drawingHand, hand);
   }, []);
 
   const handlePinchRatio = useCallback((value: number) => {
     const v = Math.min(MAX_PINCH_RATIO, Math.max(MIN_PINCH_RATIO, value));
     pinchConfigRef.current.ratioStart = v;
     setPinchRatio(v);
-    localStorage.setItem(PINCH_STORAGE_KEY, String(v));
+    saveString(STORAGE_KEYS.pinchRatio, String(v));
   }, []);
 
   const movePanel = useCallback((id: string, dx: number, dy: number) => {
@@ -702,104 +556,9 @@ export default function App() {
     let faceLandmarker: FaceLandmarker | null = null;
     let stream: MediaStream | null = null;
 
-    const drawCursor = (
-      ctx: CanvasRenderingContext2D,
-      x: number,
-      y: number,
-      ui: UiState,
-      pinching: boolean,
-      strength: number,
-    ) => {
-      const t = toolRef.current;
-      const color = ui.overUi
-        ? "rgba(255,255,255,0.95)"
-        : t.style === "eraser"
-          ? "rgba(255,255,255,0.95)"
-          : t.color;
-      const radius = ui.overUi
-        ? 11
-        : Math.max(t.size * 0.6, 7) + (1 - strength) * 8;
-
-      // Every ring gets a dark under-stroke first so the cursor stays
-      // visible on top of bright glass panels and light video backgrounds.
-      const ring = (from: number, to: number, alpha: number) => {
-        ctx.save();
-        ctx.lineCap = "round";
-        ctx.globalAlpha = alpha;
-        ctx.strokeStyle = "rgba(8, 10, 16, 0.7)";
-        ctx.lineWidth = 4.5;
-        ctx.beginPath();
-        ctx.arc(x, y, radius, from, to);
-        ctx.stroke();
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2.2;
-        ctx.shadowColor = color;
-        ctx.shadowBlur = 12;
-        ctx.beginPath();
-        ctx.arc(x, y, radius, from, to);
-        ctx.stroke();
-        ctx.restore();
-      };
-
-      ctx.save();
-      if (pinching) {
-        ring(0, Math.PI * 2, 1);
-        ctx.beginPath();
-        ctx.arc(x, y, Math.max(t.size * 0.3, 3.5), 0, Math.PI * 2);
-        ctx.fillStyle = color;
-        ctx.shadowColor = "rgba(8, 10, 16, 0.8)";
-        ctx.shadowBlur = 5;
-        ctx.fill();
-      } else {
-        // Faint full ring plus a bright arc showing pinch progress, so the
-        // user can see how close their fingers are to registering a touch.
-        ring(0, Math.PI * 2, 0.4);
-        if (strength > 0.02) {
-          ring(-Math.PI / 2, -Math.PI / 2 + strength * Math.PI * 2, 1);
-        }
-        // Center dot marking the exact selection point.
-        ctx.beginPath();
-        ctx.arc(x, y, 2.5, 0, Math.PI * 2);
-        ctx.fillStyle = color;
-        ctx.shadowColor = "rgba(8, 10, 16, 0.8)";
-        ctx.shadowBlur = 4;
-        ctx.fill();
-      }
-      ctx.restore();
-
-      // Gesture readout under the cursor, on a dark chip for readability.
-      const label =
-        ui.mode === "drag"
-          ? "MOVE"
-          : ui.mode === "slider"
-            ? "ADJUST"
-            : ui.overUi
-              ? pinching
-                ? "CLICK"
-                : "HOVER"
-              : pinching
-                ? t.style === "eraser"
-                  ? "ERASING"
-                  : t.style === "laser"
-                    ? "LASER"
-                    : "DRAWING"
-                : "";
-      if (label) {
-        ctx.save();
-        ctx.font = '600 10px "Outfit", sans-serif';
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        const tw = ctx.measureText(label).width;
-        const cy = y + radius + 16;
-        ctx.fillStyle = "rgba(8, 10, 16, 0.72)";
-        ctx.beginPath();
-        ctx.roundRect(x - tw / 2 - 7, cy - 9, tw + 14, 18, 9);
-        ctx.fill();
-        ctx.fillStyle = "rgba(255,255,255,0.92)";
-        ctx.fillText(label, x, cy);
-        ctx.restore();
-      }
-    };
+    // FPS meter: counted per processed frame, published twice a second.
+    let frameCount = 0;
+    let fpsWindowStart = performance.now();
 
     const handleFrame = () => {
       const video = videoRef.current;
@@ -809,7 +568,23 @@ export default function App() {
 
       const timestamp = performance.now();
       const result = landmarker.detectForVideo(video, timestamp);
-      const faceResult = faceLandmarker?.detectForVideo(video, timestamp);
+
+      // Face tracking is only paid for when something actually uses it:
+      // visible masks, the definition box, or the Mask Studio being open.
+      const needFace =
+        masksRef.current.length > 0 ||
+        maskDefinitionRef.current.active ||
+        maskWidgetOpenRef.current;
+      const faceResult = needFace
+        ? faceLandmarker?.detectForVideo(video, timestamp)
+        : undefined;
+
+      frameCount++;
+      if (timestamp - fpsWindowStart >= 500) {
+        setFps(Math.round((frameCount * 1000) / (timestamp - fpsWindowStart)));
+        frameCount = 0;
+        fpsWindowStart = timestamp;
+      }
 
       const lctx = live.getContext("2d");
       const bctx = base.getContext("2d");
@@ -819,236 +594,39 @@ export default function App() {
       const h = live.clientHeight;
       lctx.clearRect(0, 0, w, h);
 
-      // Symmetry guide axes so the user can see where reflections land.
-      const symNow = symmetryRef.current;
-      if (symNow !== "off") {
-        lctx.save();
-        lctx.strokeStyle = "rgba(255, 255, 255, 0.16)";
-        lctx.lineWidth = 1;
-        lctx.setLineDash([6, 8]);
-        lctx.beginPath();
-        lctx.moveTo(w / 2, 0);
-        lctx.lineTo(w / 2, h);
-        if (symNow === "kaleido") {
-          lctx.moveTo(0, h / 2);
-          lctx.lineTo(w, h / 2);
-        }
-        lctx.stroke();
-        lctx.restore();
-      }
+      drawSymmetryGuides(lctx, symmetryRef.current, w, h);
 
-      // 1. Process Face Tracking & Render AR Masks
+      // 1. Face tracking → AR masks + edit handles.
       let faceTransform: FaceTransform | null = null;
-      if (faceResult && faceResult.faceLandmarks && faceResult.faceLandmarks.length > 0) {
-        const landmarks = faceResult.faceLandmarks[0];
+      if (faceResult && faceResult.faceLandmarks.length > 0) {
         faceTransform = getFaceTransform(
-          landmarks,
+          faceResult.faceLandmarks[0],
           video.videoWidth,
           video.videoHeight,
           w,
           h,
         );
-        lastFaceTransformRef.current = faceTransform;
-      } else {
-        lastFaceTransformRef.current = null;
       }
+      lastFaceTransformRef.current = faceTransform;
 
       if (faceTransform) {
-        // Draw Face nose tip indicator dot (glowing cyan)
-        lctx.save();
-        lctx.beginPath();
-        lctx.arc(faceTransform.x * w, faceTransform.y * h, 5, 0, Math.PI * 2);
-        lctx.fillStyle = "rgba(34, 211, 238, 0.9)";
-        lctx.shadowColor = "rgba(34, 211, 238, 0.8)";
-        lctx.shadowBlur = 10;
-        lctx.fill();
-        lctx.restore();
+        drawNoseDot(lctx, faceTransform, w, h);
 
-        // Render AR Masks
-        // Render AR Masks
         for (const mask of masksRef.current) {
-          if (!mask.visible) continue;
-          lctx.save();
-          lctx.globalAlpha = mask.opacity;
-          for (const stroke of mask.strokes) {
-            const normalizedPoints = stroke.points.map((pt) =>
-              faceRelativeToCanvas(
-                pt,
-                faceTransform!,
-                mask.scale,
-                mask.offsetX,
-                mask.offsetY,
-                mask.mirror,
-              )
-            );
-            const strokeColor = mask.colorOverride || stroke.color;
-            drawStroke(lctx, { ...stroke, color: strokeColor, points: normalizedPoints }, w, h);
-          }
-          lctx.restore();
+          if (mask.visible) drawMaskLayer(lctx, mask, faceTransform, w, h);
         }
 
-        // Render Bounding Box and Handles for SELECTED mask
-        if (selectedMaskIdRef.current) {
-          const selectedMask = masksRef.current.find((m) => m.id === selectedMaskIdRef.current);
-          if (selectedMask && selectedMask.visible) {
-            const bounds = getMaskBounds(selectedMask.strokes);
-            if (bounds) {
-              const tl = faceRelativeToCanvas({ fx: bounds.minFx, fy: bounds.minFy }, faceTransform, selectedMask.scale, selectedMask.offsetX, selectedMask.offsetY, selectedMask.mirror);
-              const tr = faceRelativeToCanvas({ fx: bounds.maxFx, fy: bounds.minFy }, faceTransform, selectedMask.scale, selectedMask.offsetX, selectedMask.offsetY, selectedMask.mirror);
-              const br = faceRelativeToCanvas({ fx: bounds.maxFx, fy: bounds.maxFy }, faceTransform, selectedMask.scale, selectedMask.offsetX, selectedMask.offsetY, selectedMask.mirror);
-              const bl = faceRelativeToCanvas({ fx: bounds.minFx, fy: bounds.maxFy }, faceTransform, selectedMask.scale, selectedMask.offsetX, selectedMask.offsetY, selectedMask.mirror);
-
-              const tlx = tl.x * w, tly = tl.y * h;
-              const trx = tr.x * w, tr_y = tr.y * h;
-              const brx = br.x * w, bry = br.y * h;
-              const blx = bl.x * w, bly = bl.y * h;
-
-              lctx.save();
-              lctx.strokeStyle = "rgba(34, 211, 238, 0.65)";
-              lctx.lineWidth = 1.8;
-              lctx.setLineDash([6, 4]);
-              lctx.beginPath();
-              lctx.moveTo(tlx, tly);
-              lctx.lineTo(trx, tr_y);
-              lctx.lineTo(brx, bry);
-              lctx.lineTo(blx, bly);
-              lctx.closePath();
-              lctx.stroke();
-
-              // Draw Center Handle (Move)
-              const centerPt = faceRelativeToCanvas({ fx: bounds.centerX, fy: bounds.centerY }, faceTransform, selectedMask.scale, selectedMask.offsetX, selectedMask.offsetY, selectedMask.mirror);
-              const cx = centerPt.x * w, cy = centerPt.y * h;
-              lctx.beginPath();
-              lctx.arc(cx, cy, 14, 0, Math.PI * 2);
-              lctx.fillStyle = "rgba(34, 211, 238, 0.25)";
-              lctx.strokeStyle = "rgba(34, 211, 238, 0.95)";
-              lctx.lineWidth = 2.2;
-              lctx.setLineDash([]);
-              lctx.fill();
-              lctx.stroke();
-
-              // Center target dot
-              lctx.beginPath();
-              lctx.arc(cx, cy, 4, 0, Math.PI * 2);
-              lctx.fillStyle = "#ffffff";
-              lctx.fill();
-
-              // Draw Scale Handle (Bottom-Right)
-              lctx.beginPath();
-              lctx.arc(brx, bry, 12, 0, Math.PI * 2);
-              lctx.fillStyle = "rgba(236, 72, 153, 0.25)";
-              lctx.strokeStyle = "rgba(236, 72, 153, 0.95)";
-              lctx.lineWidth = 2.2;
-              lctx.fill();
-              lctx.stroke();
-
-              lctx.restore();
-            }
-          }
+        const selectedMask = masksRef.current.find(
+          (m) => m.id === selectedMaskIdRef.current,
+        );
+        if (selectedMask?.visible) {
+          drawSelectedMaskBox(lctx, selectedMask, faceTransform, w, h);
         }
       }
 
-      // 1.5 Render Mask Definition overlay if active
+      // 1.5 Mask-definition overlay.
       if (maskDefinitionRef.current.active) {
-        const md = maskDefinitionRef.current;
-        const x1 = (md.x - md.width / 2) * w;
-        const x2 = (md.x + md.width / 2) * w;
-        const y1 = (md.y - md.height / 2) * h;
-        const y2 = (md.y + md.height / 2) * h;
-        const ax = md.anchorX * w;
-        const ay = md.anchorY * h;
-        const cx = md.x * w;
-        const cy = md.y * h;
-
-        lctx.save();
-        
-        // Draw selection boundary box (glowing orange)
-        lctx.strokeStyle = "rgba(251, 146, 60, 0.75)";
-        lctx.lineWidth = 2.2;
-        lctx.setLineDash([5, 5]);
-        lctx.beginPath();
-        lctx.rect(x1, y1, x2 - x1, y2 - y1);
-        lctx.stroke();
-
-        const hoveredHandle = defHoverRef.current;
-
-        // Draw corner handles (orange circles); the one the fingertip is
-        // aiming at grows and brightens so the user knows it's grabbable.
-        lctx.strokeStyle = "#ffffff";
-        lctx.lineWidth = 1.5;
-        lctx.setLineDash([]);
-        const drawHandle = (hx: number, hy: number, id: string) => {
-          const on = hoveredHandle === id;
-          lctx.beginPath();
-          lctx.arc(hx, hy, on ? 13 : 8, 0, Math.PI * 2);
-          lctx.fillStyle = on ? "#fdba74" : "#fb923c";
-          if (on) {
-            lctx.shadowColor = "#fb923c";
-            lctx.shadowBlur = 16;
-          }
-          lctx.fill();
-          lctx.stroke();
-          lctx.shadowBlur = 0;
-        };
-        drawHandle(x1, y1, "resize-tl");
-        drawHandle(x2, y1, "resize-tr");
-        drawHandle(x1, y2, "resize-bl");
-        drawHandle(x2, y2, "resize-br");
-
-        // Draw center move handle
-        const boxOn = hoveredHandle === "move-box";
-        lctx.beginPath();
-        lctx.arc(cx, cy, boxOn ? 16 : 12, 0, Math.PI * 2);
-        lctx.fillStyle = boxOn ? "rgba(251, 146, 60, 0.5)" : "rgba(251, 146, 60, 0.25)";
-        lctx.strokeStyle = "#fb923c";
-        lctx.lineWidth = 2;
-        if (boxOn) {
-          lctx.shadowColor = "#fb923c";
-          lctx.shadowBlur = 16;
-        }
-        lctx.fill();
-        lctx.stroke();
-        lctx.shadowBlur = 0;
-
-        // Target dot inside center handle
-        lctx.beginPath();
-        lctx.arc(cx, cy, 3, 0, Math.PI * 2);
-        lctx.fillStyle = "#ffffff";
-        lctx.fill();
-
-        // Draw custom anchor point handle (glowing yellow crosshair target)
-        const anchorOn = hoveredHandle === "move-anchor";
-        lctx.beginPath();
-        lctx.arc(ax, ay, anchorOn ? 16 : 12, 0, Math.PI * 2);
-        lctx.fillStyle = anchorOn ? "rgba(250, 204, 21, 0.65)" : "rgba(250, 204, 21, 0.4)";
-        lctx.strokeStyle = "#facc15";
-        lctx.lineWidth = 2.2;
-        if (anchorOn) {
-          lctx.shadowColor = "#facc15";
-          lctx.shadowBlur = 18;
-        }
-        lctx.fill();
-        lctx.stroke();
-        lctx.shadowBlur = 0;
-
-        // Anchor center target dot
-        lctx.beginPath();
-        lctx.arc(ax, ay, 4, 0, Math.PI * 2);
-        lctx.fillStyle = "#ffffff";
-        lctx.fill();
-
-        // Draw text label above box
-        lctx.font = '600 11px "Outfit", "Noto Sans Thai", sans-serif';
-        lctx.fillStyle = "#fb923c";
-        lctx.textAlign = "center";
-        lctx.fillText("ขอบเขตหน้ากาก (DRAG CORNERS)", cx, y1 - 12);
-
-        // Draw text label next to Nose Anchor
-        lctx.fillStyle = "#facc15";
-        lctx.textAlign = "left";
-        lctx.fillText("จุดยึดจมูก (NOSE ANCHOR)", ax + 18, ay + 4);
-
-        lctx.restore();
+        drawDefOverlay(lctx, maskDefinitionRef.current, defHoverRef.current, w, h);
       }
 
       // 2. Process Hand Tracking
@@ -1192,31 +770,12 @@ export default function App() {
         let defIntercept = false;
         if (maskDefinitionRef.current.active) {
           const md = maskDefinitionRef.current;
-          const x1 = (md.x - md.width / 2) * w;
-          const x2 = (md.x + md.width / 2) * w;
-          const y1 = (md.y - md.height / 2) * h;
-          const y2 = (md.y + md.height / 2) * h;
-          const ax = md.anchorX * w;
-          const ay = md.anchorY * h;
-          const cx = md.x * w;
-          const cy = md.y * h;
-
-          const dist = (px: number, py: number) => Math.hypot(f.pt.x - px, f.pt.y - py);
-          // Nearest handle within `r` px, or "idle". Anchor first (it sits on
-          // top of the box centre) so it wins ties.
-          const pickHandle = (r: number): DefEditMode => {
-            if (dist(ax, ay) < r) return "move-anchor";
-            if (dist(cx, cy) < r) return "move-box";
-            if (dist(x1, y1) < r) return "resize-tl";
-            if (dist(x2, y1) < r) return "resize-tr";
-            if (dist(x1, y2) < r) return "resize-bl";
-            if (dist(x2, y2) < r) return "resize-br";
-            return "idle";
-          };
 
           if (defEditStateRef.current.mode === "idle") {
             // What the fingertip is aiming at right now (generous radius).
-            const near = f.overUi ? "idle" : pickHandle(70);
+            const near = f.overUi
+              ? "idle"
+              : pickDefHandle(f.pt.x, f.pt.y, md, w, h, 70);
             if (near !== "idle") nextDefHover = near;
 
             // Grab the handle the finger was aiming at just BEFORE the pinch.
@@ -1229,16 +788,10 @@ export default function App() {
             const aim = f.state.hoverHandle;
             if (f.hand.pinching && !f.state.stroke && aim !== "idle") {
               defEditStateRef.current = {
-                mode: aim,
+                ...snapshotDefEdit(aim, md),
                 activeHandKey: f.key,
                 startX: f.pt.x,
                 startY: f.pt.y,
-                startBoxX: md.x,
-                startBoxY: md.y,
-                startBoxW: md.width,
-                startBoxH: md.height,
-                startAnchorX: md.anchorX,
-                startAnchorY: md.anchorY,
               };
               f.state.pinchFromUi = true;
               defIntercept = true;
@@ -1254,75 +807,13 @@ export default function App() {
               defIntercept = true;
               nextDefHover = defEditStateRef.current.mode;
 
-              const dx = (f.pt.x - defEditStateRef.current.startX) / w;
-              const dy = (f.pt.y - defEditStateRef.current.startY) / h;
               const edit = defEditStateRef.current;
-
-              if (edit.mode === "move-anchor") {
-                const newAx = Math.min(1, Math.max(0, edit.startAnchorX + dx));
-                const newAy = Math.min(1, Math.max(0, edit.startAnchorY + dy));
-                setMaskDefinition((d) => ({ ...d, anchorX: newAx, anchorY: newAy }));
-              } else if (edit.mode === "move-box") {
-                const newCx = Math.min(1, Math.max(0, edit.startBoxX + dx));
-                const newCy = Math.min(1, Math.max(0, edit.startBoxY + dy));
-                const deltaX = newCx - edit.startBoxX;
-                const deltaY = newCy - edit.startBoxY;
-                setMaskDefinition((d) => ({
-                  ...d,
-                  x: newCx,
-                  y: newCy,
-                  anchorX: Math.min(1, Math.max(0, edit.startAnchorX + deltaX)),
-                  anchorY: Math.min(1, Math.max(0, edit.startAnchorY + deltaY)),
-                }));
-              } else if (edit.mode === "resize-br") {
-                const right = Math.min(1, Math.max(edit.startBoxX - edit.startBoxW / 2 + 0.05, edit.startBoxX + edit.startBoxW / 2 + dx));
-                const bottom = Math.min(1, Math.max(edit.startBoxY - edit.startBoxH / 2 + 0.05, edit.startBoxY + edit.startBoxH / 2 + dy));
-                const left = edit.startBoxX - edit.startBoxW / 2;
-                const top = edit.startBoxY - edit.startBoxH / 2;
-                setMaskDefinition((d) => ({
-                  ...d,
-                  x: (left + right) / 2,
-                  y: (top + bottom) / 2,
-                  width: right - left,
-                  height: bottom - top,
-                }));
-              } else if (edit.mode === "resize-tl") {
-                const left = Math.min(edit.startBoxX + edit.startBoxW / 2 - 0.05, Math.max(0, edit.startBoxX - edit.startBoxW / 2 + dx));
-                const top = Math.min(edit.startBoxY + edit.startBoxH / 2 - 0.05, Math.max(0, edit.startBoxY - edit.startBoxH / 2 + dy));
-                const right = edit.startBoxX + edit.startBoxW / 2;
-                const bottom = edit.startBoxY + edit.startBoxH / 2;
-                setMaskDefinition((d) => ({
-                  ...d,
-                  x: (left + right) / 2,
-                  y: (top + bottom) / 2,
-                  width: right - left,
-                  height: bottom - top,
-                }));
-              } else if (edit.mode === "resize-tr") {
-                const right = Math.min(1, Math.max(edit.startBoxX - edit.startBoxW / 2 + 0.05, edit.startBoxX + edit.startBoxW / 2 + dx));
-                const top = Math.min(edit.startBoxY + edit.startBoxH / 2 - 0.05, Math.max(0, edit.startBoxY - edit.startBoxH / 2 + dy));
-                const left = edit.startBoxX - edit.startBoxW / 2;
-                const bottom = edit.startBoxY + edit.startBoxH / 2;
-                setMaskDefinition((d) => ({
-                  ...d,
-                  x: (left + right) / 2,
-                  y: (top + bottom) / 2,
-                  width: right - left,
-                  height: bottom - top,
-                }));
-              } else if (edit.mode === "resize-bl") {
-                const left = Math.min(edit.startBoxX + edit.startBoxW / 2 - 0.05, Math.max(0, edit.startBoxX - edit.startBoxW / 2 + dx));
-                const bottom = Math.min(1, Math.max(edit.startBoxY - edit.startBoxH / 2 + 0.05, edit.startBoxY + edit.startBoxH / 2 + dy));
-                const right = edit.startBoxX + edit.startBoxW / 2;
-                const top = edit.startBoxY - edit.startBoxH / 2;
-                setMaskDefinition((d) => ({
-                  ...d,
-                  x: (left + right) / 2,
-                  y: (top + bottom) / 2,
-                  width: right - left,
-                  height: bottom - top,
-                }));
-              }
+              const updates = applyDefEdit(
+                edit,
+                (f.pt.x - edit.startX) / w,
+                (f.pt.y - edit.startY) / h,
+              );
+              if (updates) setMaskDefinition((d) => ({ ...d, ...updates }));
             } else {
               defEditStateRef.current.mode = "idle";
               defEditStateRef.current.activeHandKey = null;
@@ -1334,99 +825,59 @@ export default function App() {
         let maskIntercept = false;
         if (selectedMaskIdRef.current && faceTransform) {
           const selectedMask = masksRef.current.find((m) => m.id === selectedMaskIdRef.current);
-          if (selectedMask && selectedMask.visible) {
-            const bounds = getMaskBounds(selectedMask.strokes);
-            if (bounds) {
-              const centerPt = faceRelativeToCanvas(
-                { fx: bounds.centerX, fy: bounds.centerY },
-                faceTransform,
-                selectedMask.scale,
-                selectedMask.offsetX,
-                selectedMask.offsetY,
-                selectedMask.mirror,
-              );
-              const scalePt = faceRelativeToCanvas(
-                { fx: bounds.maxFx, fy: bounds.maxFy },
-                faceTransform,
-                selectedMask.scale,
-                selectedMask.offsetX,
-                selectedMask.offsetY,
-                selectedMask.mirror,
-              );
-              const cx = centerPt.x * w;
-              const cy = centerPt.y * h;
-              const sx = scalePt.x * w;
-              const sy = scalePt.y * h;
+          const handles =
+            selectedMask && selectedMask.visible
+              ? getMaskHandles(selectedMask, faceTransform, w, h)
+              : null;
+          if (selectedMask && handles) {
+            const distToCenter = Math.hypot(f.pt.x - handles.cx, f.pt.y - handles.cy);
+            const distToScale = Math.hypot(f.pt.x - handles.sx, f.pt.y - handles.sy);
 
-              const distToCenter = Math.hypot(f.pt.x - cx, f.pt.y - cy);
-              const distToScale = Math.hypot(f.pt.x - sx, f.pt.y - sy);
+            if (maskEditStateRef.current.mode === "idle") {
+              if (f.justPinched && (distToCenter < 52 || distToScale < 52)) {
+                const grabScale = distToCenter >= 52;
+                maskEditStateRef.current = {
+                  mode: grabScale ? "scale" : "drag",
+                  activeHandKey: f.key,
+                  startHandX: f.pt.x,
+                  startHandY: f.pt.y,
+                  startOffsetX: selectedMask.offsetX,
+                  startOffsetY: selectedMask.offsetY,
+                  startScale: selectedMask.scale,
+                  startDist: grabScale ? distToCenter : 0,
+                };
+                f.state.pinchFromUi = true;
+                maskIntercept = true;
+              }
+            } else if (maskEditStateRef.current.activeHandKey === f.key) {
+              if (f.hand.pinching) {
+                f.state.pinchFromUi = true;
+                maskIntercept = true;
+                const edit = maskEditStateRef.current;
 
-              if (maskEditStateRef.current.mode === "idle") {
-                if (f.justPinched) {
-                  if (distToCenter < 52) {
-                    maskEditStateRef.current = {
-                      mode: "drag",
-                      activeHandKey: f.key,
-                      startHandX: f.pt.x,
-                      startHandY: f.pt.y,
-                      startOffsetX: selectedMask.offsetX,
-                      startOffsetY: selectedMask.offsetY,
-                      startScale: selectedMask.scale,
-                      startDist: 0,
-                    };
-                    f.state.pinchFromUi = true;
-                    maskIntercept = true;
-                  } else if (distToScale < 52) {
-                    maskEditStateRef.current = {
-                      mode: "scale",
-                      activeHandKey: f.key,
-                      startHandX: f.pt.x,
-                      startHandY: f.pt.y,
-                      startOffsetX: selectedMask.offsetX,
-                      startOffsetY: selectedMask.offsetY,
-                      startScale: selectedMask.scale,
-                      startDist: Math.hypot(f.pt.x - cx, f.pt.y - cy),
-                    };
-                    f.state.pinchFromUi = true;
-                    maskIntercept = true;
-                  }
+                if (edit.mode === "drag") {
+                  const { dfx, dfy } = screenDeltaToFaceDelta(
+                    f.pt.x - edit.startHandX,
+                    f.pt.y - edit.startHandY,
+                    w,
+                    h,
+                    faceTransform,
+                  );
+                  handleUpdateMask(selectedMask.id, {
+                    offsetX: edit.startOffsetX + dfx,
+                    offsetY: edit.startOffsetY + dfy,
+                  });
+                } else if (edit.mode === "scale" && edit.startDist > 10) {
+                  const curDist = Math.hypot(f.pt.x - handles.cx, f.pt.y - handles.cy);
+                  const newScale = Math.min(
+                    2.5,
+                    Math.max(0.3, edit.startScale * (curDist / edit.startDist)),
+                  );
+                  handleUpdateMask(selectedMask.id, { scale: newScale });
                 }
-              } else if (maskEditStateRef.current.activeHandKey === f.key) {
-                if (f.hand.pinching) {
-                  f.state.pinchFromUi = true;
-                  maskIntercept = true;
-
-                  if (maskEditStateRef.current.mode === "drag") {
-                    const dx = f.pt.x - maskEditStateRef.current.startHandX;
-                    const dy = f.pt.y - maskEditStateRef.current.startHandY;
-
-                    const dnx = dx / w;
-                    const dny = dy / h;
-                    const dfx = dnx / faceTransform.scale;
-                    const dfy = dny / faceTransform.scale;
-
-                    const cos = Math.cos(-faceTransform.angle);
-                    const sin = Math.sin(-faceTransform.angle);
-                    const rdfx = dfx * cos - dfy * sin;
-                    const rdfy = dfx * sin + dfy * cos;
-
-                    handleUpdateMask(selectedMask.id, {
-                      offsetX: maskEditStateRef.current.startOffsetX + rdfx,
-                      offsetY: maskEditStateRef.current.startOffsetY + rdfy,
-                    });
-                  } else if (maskEditStateRef.current.mode === "scale") {
-                    const curDist = Math.hypot(f.pt.x - cx, f.pt.y - cy);
-                    const startDist = maskEditStateRef.current.startDist;
-                    if (startDist > 10) {
-                      const ratio = curDist / startDist;
-                      const newScale = Math.min(2.5, Math.max(0.3, maskEditStateRef.current.startScale * ratio));
-                      handleUpdateMask(selectedMask.id, { scale: newScale });
-                    }
-                  }
-                } else {
-                  maskEditStateRef.current.mode = "idle";
-                  maskEditStateRef.current.activeHandKey = null;
-                }
+              } else {
+                maskEditStateRef.current.mode = "idle";
+                maskEditStateRef.current.activeHandKey = null;
               }
             }
           }
@@ -1497,6 +948,7 @@ export default function App() {
           handUiState,
           f.hand.pinching,
           f.hand.pinchStrength,
+          t,
         );
       }
 
@@ -1504,25 +956,7 @@ export default function App() {
       for (const state of handsRef.current.values()) {
         if (state.laser.length === 0) continue;
         state.laser = state.laser.filter((p) => timestamp - p.t < LASER_TTL);
-        if (state.laser.length < 2) continue;
-        lctx.save();
-        lctx.lineCap = "round";
-        lctx.lineJoin = "round";
-        lctx.shadowColor = t.color;
-        lctx.shadowBlur = 14;
-        for (let i = 1; i < state.laser.length; i++) {
-          const a = state.laser[i - 1];
-          const b = state.laser[i];
-          const alpha = Math.max(0, 1 - (timestamp - b.t) / LASER_TTL);
-          lctx.globalAlpha = alpha;
-          lctx.strokeStyle = t.color;
-          lctx.lineWidth = Math.max(2, t.size * 0.7) * (0.35 + 0.65 * alpha);
-          lctx.beginPath();
-          lctx.moveTo(a.x, a.y);
-          lctx.lineTo(b.x, b.y);
-          lctx.stroke();
-        }
-        lctx.restore();
+        drawLaserTrail(lctx, state.laser, t.color, t.size, timestamp, LASER_TTL);
       }
 
       // Publish this frame's handle hover for the next overlay draw.
@@ -1532,8 +966,12 @@ export default function App() {
     const init = async () => {
       try {
         setStatus("loading-model");
-        landmarker = await createHandLandmarker();
-        faceLandmarker = await createFaceLandmarker();
+        // Both models load in parallel — they share the same WASM runtime
+        // fetch, so this nearly halves cold-start time.
+        [landmarker, faceLandmarker] = await Promise.all([
+          createHandLandmarker(),
+          createFaceLandmarker(),
+        ]);
         if (cancelled) return;
 
         setStatus("starting-camera");
@@ -1682,17 +1120,10 @@ export default function App() {
   // Autosave the artwork (debounced) so a refresh never loses work.
   useEffect(() => {
     const id = window.setTimeout(() => {
-      try {
-        if (strokesRef.current.length === 0) {
-          localStorage.removeItem(ARTWORK_STORAGE_KEY);
-        } else {
-          localStorage.setItem(
-            ARTWORK_STORAGE_KEY,
-            JSON.stringify(strokesRef.current),
-          );
-        }
-      } catch {
-        // Storage full or unavailable — autosave is best-effort.
+      if (strokesRef.current.length === 0) {
+        removeStored(STORAGE_KEYS.artwork);
+      } else {
+        saveJson(STORAGE_KEYS.artwork, strokesRef.current);
       }
     }, 600);
     return () => window.clearTimeout(id);
@@ -1701,14 +1132,10 @@ export default function App() {
   // Persist face masks the same way.
   useEffect(() => {
     const id = window.setTimeout(() => {
-      try {
-        if (masks.length === 0) {
-          localStorage.removeItem(MASKS_STORAGE_KEY);
-        } else {
-          localStorage.setItem(MASKS_STORAGE_KEY, JSON.stringify(masks));
-        }
-      } catch {
-        // best-effort
+      if (masks.length === 0) {
+        removeStored(STORAGE_KEYS.masks);
+      } else {
+        saveJson(STORAGE_KEYS.masks, masks);
       }
     }, 600);
     return () => window.clearTimeout(id);
@@ -1719,21 +1146,15 @@ export default function App() {
   useEffect(() => {
     if (restoredRef.current) return;
     restoredRef.current = true;
-    try {
-      const raw = localStorage.getItem(ARTWORK_STORAGE_KEY);
-      if (!raw) return;
-      const data = JSON.parse(raw);
-      if (!Array.isArray(data) || data.length === 0) return;
-      strokesRef.current = data as Stroke[];
-      setStrokeCount(data.length);
-      requestAnimationFrame(() => replay());
-      showToast("กู้คืนผลงานจากครั้งก่อนแล้ว", {
-        actionLabel: "เริ่มใหม่",
-        onAction: clearAll,
-      });
-    } catch {
-      // Corrupt saved data — start fresh.
-    }
+    const saved = loadSavedStrokes();
+    if (saved.length === 0) return;
+    strokesRef.current = saved;
+    setStrokeCount(saved.length);
+    requestAnimationFrame(() => replay());
+    showToast("กู้คืนผลงานจากครั้งก่อนแล้ว", {
+      actionLabel: "เริ่มใหม่",
+      onAction: clearAll,
+    });
   }, [replay, showToast, clearAll]);
 
   const handleSave = useCallback((mode: SaveMode) => {
@@ -1747,24 +1168,7 @@ export default function App() {
     // Draw active masks onto the base canvas before saving
     if (ctx && face) {
       for (const mask of masks) {
-        if (!mask.visible) continue;
-        ctx.save();
-        ctx.globalAlpha = mask.opacity;
-        for (const stroke of mask.strokes) {
-          const normalizedPoints = stroke.points.map((pt) =>
-            faceRelativeToCanvas(
-              pt,
-              face,
-              mask.scale,
-              mask.offsetX,
-              mask.offsetY,
-              mask.mirror,
-            )
-          );
-          const strokeColor = mask.colorOverride || stroke.color;
-          drawStroke(ctx, { ...stroke, color: strokeColor, points: normalizedPoints }, w, h);
-        }
-        ctx.restore();
+        if (mask.visible) drawMaskLayer(ctx, mask, face, w, h);
       }
     }
 
@@ -1929,8 +1333,6 @@ export default function App() {
 
   // ---------- Render ----------
 
-  const loading = status === "loading-model" || status === "starting-camera";
-
   return (
     <div className="stage">
       <div className="backdrop" />
@@ -1944,7 +1346,7 @@ export default function App() {
       <canvas ref={baseRef} className="layer" />
       <canvas ref={liveRef} className="layer live" onPointerDown={handlePointerDown} />
 
-      <TopBar status={status} handPresent={handPresent} />
+      <TopBar status={status} handPresent={handPresent} fps={fps} />
 
       <ActionsPanel
         innerRef={actionsRef}
@@ -2016,88 +1418,10 @@ export default function App() {
       />
 
       {status === "ready" && onboardingOpen && (
-        <div className="overlay-center onboarding">
-          <div className="overlay-card glass onboard-card">
-            <div className="onboard-badge">🖐️</div>
-            <h2>วาดภาพกลางอากาศด้วยมือของคุณ</h2>
-            <ul className="onboard-steps">
-              <li>
-                <span className="step-emoji">🤏</span>
-                <div>
-                  <strong>จีบนิ้วเพื่อวาด</strong>
-                  <span>
-                    แตะปลายนิ้วโป้งกับนิ้วชี้เข้าด้วยกันแล้วลากมือ
-                    ปล่อยนิ้วเพื่อหยุดเส้น
-                  </span>
-                </div>
-              </li>
-              <li>
-                <span className="step-emoji">👆</span>
-                <div>
-                  <strong>ชี้แล้วจีบเพื่อคลิกปุ่ม</strong>
-                  <span>
-                    เลื่อนปลายนิ้วไปเหนือปุ่มใดก็ได้ วงแหวนจะแสดงระยะจีบ
-                    จีบเพื่อกดปุ่มนั้น
-                  </span>
-                </div>
-              </li>
-              <li>
-                <span className="step-emoji">🎨</span>
-                <div>
-                  <strong>เมนูวงกลมด้านล่าง</strong>
-                  <span>
-                    เปิดเพื่อเลือกแปรง สี และขนาดเส้น —
-                    จีบค้างที่ปุ่มกลางแล้วลากเพื่อย้ายตำแหน่ง
-                  </span>
-                </div>
-              </li>
-            </ul>
-            <button className="retry-btn" onClick={dismissOnboarding}>
-              เริ่มวาดเลย
-            </button>
-          </div>
-        </div>
+        <Onboarding onDismiss={dismissOnboarding} />
       )}
 
-      {loading && (
-        <div className="overlay-center">
-          <div className="overlay-card glass">
-            <div className="spinner" />
-            <h2>
-              {status === "loading-model"
-                ? "กำลังโหลดระบบติดตามมือ…"
-                : "กำลังเปิดกล้อง…"}
-            </h2>
-            <p>
-              ทุกอย่างประมวลผลในเบราว์เซอร์ของคุณเท่านั้น —
-              ไม่มีการส่งภาพวิดีโอออกนอกอุปกรณ์
-            </p>
-          </div>
-        </div>
-      )}
-
-      {(status === "camera-denied" || status === "error") && (
-        <div className="overlay-center">
-          <div className="overlay-card glass">
-            <div className="overlay-icon">
-              <AlertIcon />
-            </div>
-            <h2>
-              {status === "camera-denied"
-                ? "ต้องอนุญาตให้เข้าถึงกล้อง"
-                : "เกิดข้อผิดพลาด"}
-            </h2>
-            <p>
-              {status === "camera-denied"
-                ? "Draw on Hand ใช้มือของคุณในการวาด จึงต้องใช้กล้อง กดอนุญาตการเข้าถึงกล้องที่แถบที่อยู่ของเบราว์เซอร์ แล้วลองอีกครั้ง"
-                : "ไม่สามารถเริ่มระบบติดตามมือได้ ตรวจสอบอินเทอร์เน็ตและการรองรับ GPU ของเครื่อง แล้วลองอีกครั้ง"}
-            </p>
-            <button className="retry-btn" onClick={() => location.reload()}>
-              ลองอีกครั้ง
-            </button>
-          </div>
-        </div>
-      )}
+      <StatusOverlays status={status} />
 
       <Toasts toasts={toasts} onDismiss={dismissToast} />
 

@@ -3,7 +3,11 @@ import {
   FaceLandmarker,
   type NormalizedLandmark,
 } from "@mediapipe/tasks-vision";
-import { type FaceRelativePoint, type MaskStroke } from "../types";
+import {
+  type FaceRelativePoint,
+  type MaskLayer,
+  type MaskStroke,
+} from "../types";
 import { videoPointToCanvas } from "./tracking";
 
 const WASM_BASE =
@@ -167,6 +171,59 @@ export function faceRelativeToCanvas(
     x: rx + face.x,
     y: ry + face.y,
   };
+}
+
+/**
+ * Converts a screen-pixel drag delta into face-relative units (undoing the
+ * face's scale and roll) so dragging a mask feels 1:1 regardless of how the
+ * head is tilted. Shared by the mouse and hand-gesture edit paths.
+ */
+export function screenDeltaToFaceDelta(
+  dxPx: number,
+  dyPx: number,
+  w: number,
+  h: number,
+  face: FaceTransform,
+): { dfx: number; dfy: number } {
+  const dfx = dxPx / w / face.scale;
+  const dfy = dyPx / h / face.scale;
+  const cos = Math.cos(-face.angle);
+  const sin = Math.sin(-face.angle);
+  return {
+    dfx: dfx * cos - dfy * sin,
+    dfy: dfx * sin + dfy * cos,
+  };
+}
+
+/**
+ * Canvas-pixel positions of a mask's move handle (bounds centre) and scale
+ * handle (bottom-right corner), or null when the mask has no points.
+ */
+export function getMaskHandles(
+  mask: MaskLayer,
+  face: FaceTransform,
+  w: number,
+  h: number,
+): { cx: number; cy: number; sx: number; sy: number } | null {
+  const bounds = getMaskBounds(mask.strokes);
+  if (!bounds) return null;
+  const center = faceRelativeToCanvas(
+    { fx: bounds.centerX, fy: bounds.centerY },
+    face,
+    mask.scale,
+    mask.offsetX,
+    mask.offsetY,
+    mask.mirror,
+  );
+  const corner = faceRelativeToCanvas(
+    { fx: bounds.maxFx, fy: bounds.maxFy },
+    face,
+    mask.scale,
+    mask.offsetX,
+    mask.offsetY,
+    mask.mirror,
+  );
+  return { cx: center.x * w, cy: center.y * h, sx: corner.x * w, sy: corner.y * h };
 }
 
 export interface MaskBounds {
